@@ -183,7 +183,9 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
         print("serial: raw output logged to " + rawlog.path)
     app.config['RAWLOG'] = rawlog
 
-    nodes = NodeRegistry(db, settings)
+    # A receiver going offline, falling silent or crashing goes out to every
+    # channel that takes node alerts.
+    nodes = NodeRegistry(db, settings, on_event=notifier.node_event)
     app.config['NODES'] = nodes
     home_id = nodes.ensure_local()
     batch_ingest = BatchIngest(nodes, sess, rawlog)

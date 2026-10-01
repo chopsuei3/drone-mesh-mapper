@@ -42,6 +42,17 @@
     its details, commands and raw output.
   </p>
   <div class="card" style="overflow-x:auto"><table class="nd-table" id="nodesTable"></table></div>
+  <div class="nd-form" style="margin-top:8px">
+    <div class="row">
+      <label class="dim" for="offMin">offline or silent after</label>
+      <input id="offMin" inputmode="numeric" style="width:64px" aria-label="minutes">
+      <span class="dim">min without a word</span>
+      <button id="offSave">Save</button>
+      <span class="dim">&middot; alerts for it go to channels with <i>node problems</i> ticked on the
+        <a href="/sources" style="color:var(--accent)">Sources</a> page</span>
+      <span id="offMsg" class="dim"></span>
+    </div>
+  </div>
 
   <div class="nd-grid">
     <div>

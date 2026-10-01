@@ -44,8 +44,10 @@
   <h2 class="section" style="margin-top:22px">Notifications</h2>
   <p class="dim" style="margin:-6px 0 12px; max-width:70ch">
     An alert goes out when a drone takes off &mdash; as soon as it has a GPS fix, or
-    after a short wait without one. Everything here is also available over the API
-    (<span class="mono">/api/notify/&hellip;</span>, <span class="mono">/api/settings</span>).
+    after a short wait without one. A channel can also take <b>node problems</b>: a
+    receiver offline, its XIAO silent or crashed, and when it is back (thresholds on the
+    <a href="/nodes" style="color:var(--accent)">Nodes</a> page). Everything here is also
+    available over the API (<span class="mono">/api/notify/&hellip;</span>, <span class="mono">/api/settings</span>).
   </p>
   <div class="card ncard" style="max-width:760px">
     <div id="nChannels" class="dim">loading&hellip;</div>
@@ -81,6 +83,12 @@
           <label class="dim" for="nCool">cooldown</label>
           <input id="nCool" value="15" inputmode="numeric" style="flex:0 0 56px">
           <span class="dim">min per drone</span>
+        </div>
+        <div class="row">
+          <span class="dim">send</span>
+          <label><input type="checkbox" id="nEvTakeoff" checked> drone takeoffs</label>
+          <label><input type="checkbox" id="nEvNodes"> node problems
+            <span class="dim">(a receiver offline, its XIAO silent or crashed, and back)</span></label>
         </div>
         <div class="row" id="nPickAny">
           <label class="pick">except these drones (e.g. your own)

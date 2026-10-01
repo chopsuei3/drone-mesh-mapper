@@ -28,7 +28,14 @@ alerting again straight away.
 Where it can go. Discord URLs must be Discord webhook URLs and the Pushbullet
 endpoint is fixed, so unlike a generic webhook a channel cannot be pointed at an
 arbitrary host. Secrets are masked whenever a channel is read back.
+
+What it is told about. Each channel lists its `events`: 'takeoff' (the default)
+and/or 'nodes' - a receiver going offline, its XIAO falling silent or
+crashing, and coming back (nodes.py decides when; this module only delivers).
+Node alerts ignore the drone filter, and repeat for the same node and kind at
+most once per NODE_COOLDOWN_S per channel, so a flapping link does not flood.
 """
+import collections
 import heapq
 import itertools
 import json
@@ -53,6 +60,8 @@ HTTP_TIMEOUT_S = 10
 HOLD_RECHECK_S = 0.25              # how often a held alert looks again
 MAX_RETRY_AFTER_S = 30             # Discord 429: wait this long at most, once
 LOG_KEEP = 1000
+EVENTS = ('takeoff', 'nodes')
+NODE_COOLDOWN_S = 600              # same node, same kind of alert, same channel
 
 DISCORD_URL = re.compile(
     r'https://(?:(?:ptb|canary)\.)?(?:discord\.com|discordapp\.com)'
@@ -202,10 +211,14 @@ def validate(data, existing=None):
     if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) \
             or not 0 <= cooldown <= MAX_COOLDOWN_S:
         raise ValueError('cooldown_s must be a number of seconds from 0 to %d' % MAX_COOLDOWN_S)
+    events = data.get('events', base.get('events', ['takeoff']))
+    if not isinstance(events, list) or not events or not all(e in EVENTS for e in events):
+        raise ValueError('events must be a non-empty list of: %s' % ', '.join(EVENTS))
     return {
         'name': name, 'type': ctype, 'enabled': enabled, 'cooldown_s': float(cooldown),
         'config': _validate_config(ctype, data.get('config'), base.get('config') or {}),
         'filter': validate_filter(data.get('filter', base.get('filter'))),
+        'events': [e for e in EVENTS if e in events],
     }
 
 
@@ -263,6 +276,53 @@ def compose(drone, flight, base_url=''):
         'via': 'DJI DroneID' if drone.get('id_type') == 'DJI' else None,
         'app_url': ('%s/drone/%s' % (base_url, drone['id'])) if base_url else None,
     }
+
+
+def _span(s):
+    s = max(0, int(s or 0))
+    if s < 90:
+        return '%d s' % s
+    if s < 5400:
+        return '%d min' % round(s / 60.0)
+    if s < 172800:
+        return '%.1f h' % (s / 3600.0)
+    return '%d days' % round(s / 86400.0)
+
+
+NODE_COLORS = {'relay_offline': 0xFF6B7A, 'xiao_silent': 0xFFB454, 'restarted': 0xFF6B7A,
+               'recovered': 0x6EE7A8}
+
+
+def compose_node(kind, node, detail, base_url='', now=None):
+    """A node alert, in the same shape compose() returns, so both services
+    render it with their usual payload builders."""
+    now = now or time.time()
+    name = node.get('name') or 'node #%s' % node.get('id')
+    where = ' (%s)' % node['notes'] if node.get('notes') else ''
+    if kind == 'relay_offline':
+        title = 'Node offline: %s' % name
+        desc = ('No contact from %s%s for %s. Whatever its XIAO hears is kept on the relay'
+                ' and arrives when the link is back.'
+                % (name, where, _span(now - (node.get('last_contact_at') or now))))
+    elif kind == 'xiao_silent':
+        title = 'XIAO silent: %s' % name
+        desc = ('%s%s has printed nothing for %s, though %s. Check its USB cable and power;'
+                ' a wedged XIAO needs unplugging.'
+                % (name, where, _span(now - (node.get('last_line_at') or now)),
+                   'its relay is checking in' if node.get('kind') == 'relay' else 'this server is up'))
+    elif kind == 'restarted':
+        d = detail or {}
+        title = 'XIAO restarted: %s' % name
+        desc = ('The XIAO on %s%s%s restarted after a %s, about %s ago. "panic" or a'
+                ' watchdog reset is a firmware crash; "brownout" is a power dip.'
+                % (name, where, (' (%s)' % d['port'].replace('/dev/', '')) if d.get('port') else '',
+                   d.get('reset') or 'crash', _span(now - (d.get('at') or now))))
+    else:
+        title = 'Node back: %s' % name
+        desc = '%s%s is online again.' % (name, where)
+    return {'title': title, 'description': desc, 'color': NODE_COLORS.get(kind, 0x4FC3F7),
+            'started_at': now,
+            'app_url': ('%s/nodes#%s' % (base_url, node.get('id'))) if base_url else None}
 
 
 def _signal(a):
@@ -389,16 +449,30 @@ class Notifier:
         self._seq = itertools.count()
         self._stop = threading.Event()
         self._thread = None
+        self._node_q = collections.deque(maxlen=200)    # node alerts waiting for the worker
+        self._node_last = {}            # (channel, node, kind) -> when it last went out
         with db.write_lock():
             db.conn.executescript(SCHEMA)
+            # Columns added with node alerts; a channel from before them has
+            # events NULL, which means takeoff alerts only, as it always did.
+            for table, col, decl in (('notify_channels', 'events', 'TEXT'),
+                                     ('notify_log', 'event', 'TEXT'),
+                                     ('notify_log', 'node_id', 'INTEGER')):
+                have = {r[1] for r in db.conn.execute('PRAGMA table_info(%s)' % table)}
+                if col not in have:
+                    db.conn.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table, col, decl))
 
     # -- channels -----------------------------------------------------------------
     @staticmethod
     def _decode(r):
+        try:
+            events = json.loads(r['events']) if r['events'] else ['takeoff']
+        except ValueError:
+            events = ['takeoff']
         return {'id': r['id'], 'name': r['name'], 'type': r['type'],
                 'enabled': bool(r['enabled']), 'cooldown_s': r['cooldown_s'],
                 'config': json.loads(r['config']), 'filter': json.loads(r['filter']),
-                'created_at': r['created_at']}
+                'events': events, 'created_at': r['created_at']}
 
     def _get(self, cid):
         r = self.db.one("SELECT * FROM notify_channels WHERE id=?", (cid,))
@@ -437,9 +511,9 @@ class Notifier:
         c = validate(data)
         cur = self.db.execute(
             "INSERT INTO notify_channels(name, type, enabled, config, filter, cooldown_s,"
-            " created_at) VALUES(?,?,?,?,?,?,?)",
+            " events, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (c['name'], c['type'], int(c['enabled']), json.dumps(c['config']),
-             json.dumps(c['filter']), c['cooldown_s'], time.time()))
+             json.dumps(c['filter']), c['cooldown_s'], json.dumps(c['events']), time.time()))
         return self.get(cur.lastrowid)
 
     def update(self, cid, data):
@@ -448,10 +522,10 @@ class Notifier:
             return None
         c = validate(data, existing=old)
         self.db.execute(
-            "UPDATE notify_channels SET name=?, enabled=?, config=?, filter=?, cooldown_s=?"
-            " WHERE id=?",
+            "UPDATE notify_channels SET name=?, enabled=?, config=?, filter=?, cooldown_s=?,"
+            " events=? WHERE id=?",
             (c['name'], int(c['enabled']), json.dumps(c['config']), json.dumps(c['filter']),
-             c['cooldown_s'], cid))
+             c['cooldown_s'], json.dumps(c['events']), cid))
         return self.get(cid)
 
     def delete(self, cid):
@@ -466,14 +540,15 @@ class Notifier:
             limit = 100
         rows = self.db.query(
             "SELECT l.*, c.name AS channel_name, c.type AS channel_type,"
-            " d.label AS drone_label, d.basic_id"
+            " d.label AS drone_label, d.basic_id, n.name AS node_name"
             " FROM notify_log l"
             " LEFT JOIN notify_channels c ON c.id = l.channel_id"
             " LEFT JOIN drones d ON d.id = l.drone_id"
+            " LEFT JOIN nodes n ON n.id = l.node_id"
             " ORDER BY l.id DESC LIMIT ?", (limit,))
         return [dict(r) for r in rows]
 
-    def _log(self, cid, drone_id, flight_id, status, detail):
+    def _log(self, cid, drone_id, flight_id, status, detail, event=None, node_id=None):
         """Record a delivery; a real 'sent' also starts that drone's cooldown.
         One transaction, so no reader ever sees the log over its cap."""
         now = time.time()
@@ -482,8 +557,9 @@ class Notifier:
             conn.execute('BEGIN')
             try:
                 conn.execute(
-                    "INSERT INTO notify_log(ts, channel_id, drone_id, flight_id, status, detail)"
-                    " VALUES(?,?,?,?,?,?)", (now, cid, drone_id, flight_id, status, detail))
+                    "INSERT INTO notify_log(ts, channel_id, drone_id, flight_id, status, detail,"
+                    " event, node_id) VALUES(?,?,?,?,?,?,?,?)",
+                    (now, cid, drone_id, flight_id, status, detail, event, node_id))
                 if status == 'sent' and cid is not None and drone_id is not None:
                     conn.execute("INSERT OR REPLACE INTO notify_last(channel_id, drone_id, ts)"
                                  " VALUES(?,?,?)", (cid, drone_id, now))
@@ -559,6 +635,16 @@ class Notifier:
             heapq.heappush(self._heap, (due, next(self._seq), job['flight_id']))
             self._cv.notify()
 
+    def node_event(self, kind, node, detail=None):
+        """A receiver changed state (see nodes.NodeRegistry.check). Queued for
+        the worker; never blocks the monitor or ingest thread that calls it."""
+        if self._thread is None or not self.settings.get('notify.enabled'):
+            return
+        with self._cv:
+            self._node_q.append({'kind': kind, 'node': node, 'detail': detail or {},
+                                 'at': time.time()})
+            self._cv.notify()
+
     def flight_point(self, p):
         """A detection with a position. The first one sends the alert now."""
         with self._cv:
@@ -587,6 +673,8 @@ class Notifier:
     def _next_job(self):
         with self._cv:
             while not self._stop.is_set():
+                if self._node_q:
+                    return self._node_q.popleft()
                 now = time.time()
                 if self._heap and self._heap[0][0] <= now:
                     due, _, fid = heapq.heappop(self._heap)
@@ -615,9 +703,12 @@ class Notifier:
             if job is None:
                 return
             try:
-                self.deliver(job)
+                if 'kind' in job:
+                    self.deliver_node(job)
+                else:
+                    self.deliver(job)
             except Exception as e:                    # never let the worker die
-                logger.warning('alert for flight %s failed: %s', job.get('flight_id'), e)
+                logger.warning('alert %s failed: %s', job.get('flight_id') or job.get('kind'), e)
 
     def _drone(self, drone_id):
         r = self.db.one(
@@ -653,8 +744,9 @@ class Notifier:
         """Send one takeoff alert to every channel whose filter selects the drone."""
         if not self.settings.get('notify.enabled'):
             return []
-        channels = [self._decode(r) for r in self.db.query(
-            "SELECT * FROM notify_channels WHERE enabled=1 ORDER BY id")]
+        channels = [ch for ch in (self._decode(r) for r in self.db.query(
+            "SELECT * FROM notify_channels WHERE enabled=1 ORDER BY id"))
+            if 'takeoff' in ch['events']]
         drone = self._drone(job['drone_id']) if channels else None
         if drone is None:                         # no channels, or drone merged away
             return []
@@ -673,5 +765,32 @@ class Notifier:
                 alert = compose(drone, self._flight(job), self.settings.get('notify.base_url'))
             ok, detail = self.send(ch, alert)
             self._log(ch['id'], drone['id'], job['flight_id'], 'sent' if ok else 'failed', detail)
+            results.append((ch['id'], 'sent' if ok else 'failed'))
+        return results
+
+    def deliver_node(self, job):
+        """Send one node alert to every channel that takes them."""
+        if not self.settings.get('notify.enabled'):
+            return []
+        kind, node = job['kind'], job['node']
+        channels = [ch for ch in (self._decode(r) for r in self.db.query(
+            "SELECT * FROM notify_channels WHERE enabled=1 ORDER BY id"))
+            if 'nodes' in ch['events']]
+        results, alert, now = [], None, time.time()
+        for ch in channels:
+            key = (ch['id'], node.get('id'), kind)
+            last = self._node_last.get(key)
+            if last is not None and now - last < NODE_COOLDOWN_S:
+                self._log(ch['id'], None, None, 'suppressed',
+                          'node cooldown: same alert %d s ago' % (now - last), kind, node.get('id'))
+                results.append((ch['id'], 'suppressed'))
+                continue
+            if alert is None:
+                alert = compose_node(kind, node, job.get('detail'),
+                                     self.settings.get('notify.base_url'), now)
+            ok, detail = self.send(ch, alert)
+            if ok:
+                self._node_last[key] = now
+            self._log(ch['id'], None, None, 'sent' if ok else 'failed', detail, kind, node.get('id'))
             results.append((ch['id'], 'sent' if ok else 'failed'))
         return results

@@ -167,13 +167,19 @@ RawView(document.getElementById('raw'));
           ? '<span class="st-' + esc(c.last.status) + '">' + esc(c.last.status) + '</span> '
             + ago(c.last.ts) + (c.last.status === 'failed' ? ' - ' + esc(c.last.detail) : '')
           : 'nothing sent yet';
+        var ev = c.events || ['takeoff'];
         return '<div class="chan" data-id="' + c.id + '">'
           + '<div class="row"><b>' + esc(c.name) + '</b><span class="badge">' + esc(c.type) + '</span>'
           + '<label style="margin-left:auto"><input type="checkbox" class="ntog"'
           + (c.enabled ? ' checked' : '') + '> enabled</label>'
           + '<button class="ntest">Test</button><button class="ndel">Delete</button></div>'
-          + '<div class="sub">' + esc(describe(c.filter)) + ' · cooldown '
-          + Math.round(c.cooldown_s / 60) + ' min</div>'
+          + '<div class="row sub">send '
+          + '<label><input type="checkbox" class="nev" data-ev="takeoff"'
+          + (ev.indexOf('takeoff') >= 0 ? ' checked' : '') + '> takeoffs</label>'
+          + '<label><input type="checkbox" class="nev" data-ev="nodes"'
+          + (ev.indexOf('nodes') >= 0 ? ' checked' : '') + '> node problems</label></div>'
+          + '<div class="sub">' + (ev.indexOf('takeoff') >= 0 ? esc(describe(c.filter)) + ' · cooldown '
+          + Math.round(c.cooldown_s / 60) + ' min' : 'no takeoff alerts') + '</div>'
           + '<div class="sub mono">' + esc(target(c)) + '</div>'
           + '<div class="sub nres">last: ' + last + '</div></div>';
       }).join('') : '<div class="dim">No channels yet. Add Discord or Pushbullet below.</div>';
@@ -183,7 +189,9 @@ RawView(document.getElementById('raw'));
   function loadLog() {
     return fetch('/api/notify/log?limit=15').then(json).then(function (rows) {
       el('nLog').innerHTML = rows.length ? rows.map(function (r) {
-        var who = r.drone_id ? (r.drone_label || r.basic_id || droneName(r.drone_id)) : 'test';
+        var who = r.drone_id ? (r.drone_label || r.basic_id || droneName(r.drone_id))
+          : r.event ? 'node ' + (r.node_name || '#' + r.node_id) + ': ' + r.event.replace('_', ' ')
+          : 'test';
         return '<div class="kv"><span>' + ago(r.ts) + ' · '
           + esc(r.channel_name || 'deleted channel') + ' · ' + esc(who) + '</span>'
           + '<span class="st-' + esc(r.status) + '">' + esc(r.status)
@@ -236,10 +244,13 @@ RawView(document.getElementById('raw'));
       : { mode: 'any', exclude_drone_ids: picked('nExclude', true) };
     var mins = parseFloat(el('nCool').value);
     var msg = el('nMsg');
+    var events = [];
+    if (el('nEvTakeoff').checked) events.push('takeoff');
+    if (el('nEvNodes').checked) events.push('nodes');
     msg.style.color = ''; msg.textContent = 'saving...';
     send('POST', '/api/notify/channels', {
       type: type, name: el('nName').value.trim(), config: cfg, filter: filter,
-      cooldown_s: isNaN(mins) ? 900 : Math.max(0, mins) * 60
+      cooldown_s: isNaN(mins) ? 900 : Math.max(0, mins) * 60, events: events
     }).then(function (j) {
       if (j.error) { msg.textContent = j.error; msg.style.color = 'var(--bad)'; return; }
       msg.textContent = 'Added - use Test to check it.';
@@ -269,9 +280,19 @@ RawView(document.getElementById('raw'));
     }
   });
   el('nChannels').addEventListener('change', function (e) {
-    if (!e.target.classList.contains('ntog')) return;
-    var id = e.target.closest('.chan').getAttribute('data-id');
-    send('PATCH', '/api/notify/channels/' + id, { enabled: e.target.checked }).then(loadChannels);
+    var row = e.target.closest('.chan');
+    if (!row) return;
+    var id = row.getAttribute('data-id');
+    if (e.target.classList.contains('ntog')) {
+      send('PATCH', '/api/notify/channels/' + id, { enabled: e.target.checked }).then(loadChannels);
+    } else if (e.target.classList.contains('nev')) {
+      var events = Array.prototype.filter.call(row.querySelectorAll('.nev'), function (b) { return b.checked; })
+        .map(function (b) { return b.getAttribute('data-ev'); });
+      send('PATCH', '/api/notify/channels/' + id, { events: events }).then(function (j) {
+        if (j.error) row.querySelector('.nres').innerHTML = '<span class="st-failed">' + esc(j.error) + '</span>';
+        else loadChannels();
+      });
+    }
   });
 
   el('setNotify').addEventListener('change', function (e) {

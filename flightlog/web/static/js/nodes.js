@@ -389,10 +389,20 @@
     });
   });
 
+  el('offSave').addEventListener('click', function () {
+    var mins = parseFloat(el('offMin').value);
+    send('PATCH', '/api/settings', { 'nodes.offline_after_s': isNaN(mins) ? -1 : mins * 60 })
+      .then(function (j) {
+        msg('offMsg', j.error ? j.error.replace('nodes.offline_after_s', 'the threshold') : 'Saved.', !!j.error);
+        if (!j.error) load();
+      });
+  });
+
   // -- boot -----------------------------------------------------------------------------------
   fetch('/api/settings').then(json).then(function (s) {
     el('serverUrl').value = (s && s['nodes.server_url']) || location.origin;
     el('serverUrl').placeholder = location.origin;
+    el('offMin').value = Math.round((s['nodes.offline_after_s'] || 600) / 60);
   }).catch(function () { el('serverUrl').value = location.origin; });
 
   var fromHash = parseInt((location.hash || '').slice(1), 10);
