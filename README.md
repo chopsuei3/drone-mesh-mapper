@@ -61,6 +61,18 @@ Three builds in one page:
 
 ---
 
+## Which app do I run?
+
+Two apps live in this repo and share the firmware and the `static/` assets:
+
+| | |
+|---|---|
+| **`mesh-mapper.py`** | The original live map. One file, installed by `RPI/install_rpi.py`. Everything below documents this one. |
+| **`flightlog/`** | A flight-first rebuild — a sortable, filterable table of flights backed by SQLite, per-drone and per-group history, geofencing, offline maps and exports. See **[flightlog/README.md](flightlog/README.md)**. |
+
+Only one of them can hold a given USB port at a time. `flightlog/README.md` covers
+copying it to a Pi and switching the autostart over.
+
 ## Quick Start
 
 ### Automated (Raspberry Pi)
