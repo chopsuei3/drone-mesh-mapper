@@ -9,6 +9,10 @@
 
 **Real-time drone Remote ID detection · Meshtastic LoRa relay · live web map · fully offline-capable**
 
+This fork adds **flightlog** — a flight-first logger with takeoff alerts, analysis and FAA
+identification — and a **hardened dualcore firmware** that also decodes DJI DroneID.
+
+[This fork](#this-fork) ·
 [Quick Start](#quick-start) ·
 [Features](#features) ·
 [Offline Maps](#offline-maps) ·
@@ -18,6 +22,94 @@
 <img src="eye.png" alt="Drone Detection Eye" style="width:50%; height:25%;">
 
 </div>
+
+---
+
+## This fork
+
+This is [chopsuei3/drone-mesh-mapper](https://github.com/chopsuei3/drone-mesh-mapper), a fork of
+[colonelpanichacks/drone-mesh-mapper](https://github.com/colonelpanichacks/drone-mesh-mapper). It
+keeps the original `mesh-mapper.py`, stays in sync with upstream, and adds two things:
+**flightlog**, a different way to run the collection side, and a reworked **dualcore firmware**.
+
+### flightlog — flights, not markers
+
+The original mapper is a live map with a sidebar of MAC addresses.
+[flightlog](flightlog/README.md) makes the *flight* the thing you work with: every detection
+session for a drone, with its path, distance, duration, altitude and signal, stored in SQLite
+and listed in a table you can sort, filter and export.
+
+- **Flight table** as the home page. Filter by date, text (label, serial, MAC, model), group,
+  tag, or whether a flight has a GPS track; put any selection of flights on one map; merge a
+  flight that an RF dropout split in two; export CSV, KML or GPX.
+- **Drones, not MACs.** A drone is identified by its Remote ID serial, so labels, tags, groups
+  and colours follow it through MAC randomisation. Each drone gets its own colour automatically.
+- **Live view** of everything airborne, pushed over Server-Sent Events.
+- **Takeoff alerts** to Discord or Pushbullet — for any drone, or only chosen drones, groups or
+  tags — with a per-drone cooldown. Configured on the Sources page or over the API.
+- **FAA identification.** New serials are looked up in the FAA's UAS Declaration of Compliance
+  database for make and model. Owner details are not public; the FAA shares them only with law
+  enforcement.
+- **Analysis**: an hour × weekday heatmap, launch points and operator positions on a map,
+  per-drone and per-group breakdowns, the model mix, and how drones were heard (BLE, Wi-Fi
+  channel, DJI DroneID) — all scoped by one filter row.
+- **Node health**: a raw serial view on the Sources page, a rotating log file, and an
+  alive/silent status for each port.
+- Geofences with enter/exit webhooks, offline MBTiles basemaps (shared with `mesh-mapper.py`),
+  optional retention, a Raspberry Pi installer that sets up a systemd service, and an importer
+  for `mesh-mapper.py`'s CSV history.
+
+flightlog serves on port 5001 and has **no login** — run it on your LAN or a private VPN only.
+
+### Firmware — `remoteid-mesh-dualcore`
+
+The XIAO ESP32-S3 dualcore build is reworked. Its output stays compatible with
+`mesh-mapper.py`.
+
+- **Crash fixes** inherited from upstream: a NULL-pointer write on the first Wi-Fi NAN Remote ID
+  frame, a startup race that could reset the board when a drone was in range at boot, and
+  unbounded parsing of beacon information elements.
+- **No dropped detections** from the one-second stall in the mesh relay. The print queue is
+  deeper, and one task owns the serial port, so lines never interleave.
+- **Channel hopping** across 1–11 with extra time on 6 (the Wi-Fi NAN channel), instead of
+  sitting on channel 6 and missing drones that beacon elsewhere.
+- **BLE fix**: Remote ID is found anywhere in an advertisement, not only as its first record.
+- **DJI DroneID** (Wi-Fi beacons, OUI `26:37:12`) is decoded for older and Wi-Fi-linked DJI
+  models. Current DJI aircraft are already covered by standard Remote ID; DJI's OcuSync
+  video-link DroneID needs a software-defined radio.
+- **Every detection says how it was heard** (`band`, `channel`), and a once-a-minute status line
+  carries radio counters and the reason for the last restart — `"reset":"panic"` or a watchdog
+  value means the board crashed.
+
+Build and flash it with PlatformIO, as described under [Firmware](#firmware). The other firmware
+variants are unchanged from upstream.
+
+### Known gaps
+
+- The **Web Flasher and the prebuilt binaries in `firmware/` are upstream's**. They do not
+  include the firmware changes above; build `remoteid-mesh-dualcore` from source.
+- **`node-mode-dualcore`** still has the Wi-Fi NAN crash fixed above in the dualcore build.
+- flightlog has **no authentication** (see above).
+
+### Planned
+
+**City-wide tracking**: XIAOs at several sites, each with a Raspberry Pi relay, all feeding one
+flightlog over Tailscale, with node health, "heard by" coverage and offline alerts. The design is
+in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md); it is not started yet.
+
+### Changes so far
+
+- **flightlog**: flight table, drone identity and groups, live view, geofences, exports, Pi
+  installer, and import of `mesh-mapper.py` history.
+- **Firmware coverage**: channel hopping, the BLE advertisement fix, `band`/`channel` on every
+  detection, and the diagnostic status line.
+- **flightlog**: raw serial view and log, remembered basemap, per-drone colours.
+- **flightlog**: Discord/Pushbullet takeoff alerts, FAA identification, automatic per-drone
+  colours.
+- **flightlog**: the rebuilt Analysis page.
+- **Firmware**: the crash and dropped-detection fixes, and DJI DroneID — with flightlog support
+  for DJI drones (their home point is labelled as such, and they are never sent to the FAA
+  lookup).
 
 ---
 
@@ -59,6 +151,10 @@ Three builds in one page:
 - **Node Mode / Remote** - field detector, tags each detection with a per-board `node_id`
 - **Node Mode / Home** - base bridge, dedups multi-node hits by drone MAC, forwards to `mesh-mapper.py`
 
+> **In this fork:** the flasher serves upstream's builds, which do not include this fork's
+> dualcore fixes or DJI DroneID. Build `remoteid-mesh-dualcore` from source instead — see
+> [Firmware](#firmware).
+
 ---
 
 ## Which app do I run?
@@ -67,15 +163,27 @@ Two apps live in this repo and share the firmware and the `static/` assets:
 
 | | |
 |---|---|
-| **`mesh-mapper.py`** | The original live map. One file, installed by `RPI/install_rpi.py`. Everything below documents this one. |
-| **`flightlog/`** | A flight-first rebuild — a sortable, filterable table of flights backed by SQLite, per-drone and per-group history, geofencing, offline maps and exports. See **[flightlog/README.md](flightlog/README.md)**. |
+| **`flightlog/`** | **Recommended in this fork.** A flight-first rebuild — see [This fork](#this-fork) and **[flightlog/README.md](flightlog/README.md)**. |
+| **`mesh-mapper.py`** | The original live map, kept in sync with upstream. One file, installed by `RPI/install_rpi.py`. The Features, ADS-B and API sections below document this one. |
 
-Only one of them can hold a given USB port at a time. `flightlog/README.md` covers
-copying it to a Pi and switching the autostart over.
+Only one of them can hold a given USB port at a time. The flightlog installer can take over
+the port and the autostart from `mesh-mapper.py` (`--replace-legacy`).
 
 ## Quick Start
 
-### Automated (Raspberry Pi)
+### flightlog (Raspberry Pi)
+```bash
+git clone https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
+cd ~/drone-mesh-mapper
+python3 RPI/install_flightlog.py                 # add --replace-legacy to take over from mesh-mapper.py
+```
+
+The installer installs the dependencies, sets up and starts a `flightlog` systemd service on
+port 5001, and prints the address to open. Then open **Sources**, tick the XIAO's serial port,
+and wait for it to show `alive`. Details, upgrades and troubleshooting:
+[flightlog/README.md](flightlog/README.md).
+
+### mesh-mapper.py — automated (Raspberry Pi)
 ```bash
 wget https://raw.githubusercontent.com/colonelpanichacks/drone-mesh-mapper/main/RPI/install_rpi.py
 python3 install_rpi.py --branch main          # stable
@@ -84,9 +192,9 @@ python3 install_rpi.py --branch Dev           # latest
 
 Optional flags: `--install-dir /opt/mesh-mapper`, `--no-cron`, `--force`.
 
-### Manual
+### mesh-mapper.py — manual
 ```bash
-git clone https://github.com/colonelpanichacks/drone-mesh-mapper
+git clone https://github.com/chopsuei3/drone-mesh-mapper
 cd drone-mesh-mapper
 pip3 install -r requirements.txt
 python3 mesh-mapper.py
@@ -106,19 +214,26 @@ Pick the variant that matches your board. All build with PlatformIO:
 
 | Path | Target | Notes |
 |---|---|---|
-| `node-mode-dualcore/` | ESP32-S3 dual-core | Remote node + home dedup node (`pio run -e remote` / `-e home`) |
-| `remoteid-mesh-dualcore/` | ESP32-S3 | BLE + WiFi concurrent detection, mesh relay |
+| `node-mode-dualcore/` | ESP32-S3 dual-core | Remote node + home dedup node (`pio run -e remote` / `-e home`). Still has the Wi-Fi NAN crash. |
+| `remoteid-mesh-dualcore/` | ESP32-S3 | BLE + WiFi concurrent detection, mesh relay. **Reworked in this fork** — crash fixes, channel hopping, DJI DroneID. Use this with flightlog. |
 | `remoteid-mesh/` | ESP32-S3 / single-core | Original variant, GPIO6/7 pinout |
 | `remoteid-c5-5g/` | ESP32-C5 | UNII-3 5GHz WiFi RID (channels 149/153/157/161/165) |
 
 ```bash
 cd remoteid-mesh-dualcore
-pio run -t upload
+pio run -e seeed_xiao_esp32s3 -t upload
 ```
+
+Name the environment: `remoteid-mesh-dualcore/platformio.ini` also defines a C6 target, and a
+bare `pio run -t upload` builds and uploads both. In VS Code, pick
+`env:seeed_xiao_esp32s3` → **Upload** in the PlatformIO sidebar.
 
 ---
 
 ## Features
+
+> These are `mesh-mapper.py`'s features. flightlog's are under [This fork](#this-fork) and in
+> [flightlog/README.md](flightlog/README.md).
 
 ### Real-time Mapping
 - Live drone + pilot positions, broadcast rings, custom markers
@@ -318,7 +433,8 @@ Powered by [Nominatim](https://nominatim.openstreetmap.org/). Type a place name,
 
 ## ADS-B Air Traffic
 
-Optional layer overlaying live aircraft on top of the drone RID feed. Six sources, ranging from zero-setup to "I have a HackRF in the woods":
+Optional layer overlaying live aircraft on top of the drone RID feed (`mesh-mapper.py` only —
+flightlog deliberately leaves ADS-B out and sticks to drones). Six sources, ranging from zero-setup to "I have a HackRF in the woods":
 
 ### Network sources (no setup, just internet)
 
@@ -362,6 +478,9 @@ dump1090-fa --net --net-bo-port 30005 --device-type hackrf
 ---
 
 ## API Reference
+
+> `mesh-mapper.py`'s API. flightlog's endpoints (flights, drones, analysis, notifications,
+> settings) are documented in [flightlog/README.md](flightlog/README.md).
 
 ### Detections
 | Method | Endpoint | Description |
@@ -504,7 +623,11 @@ tail -f mapper.log             # what's it saying?
 
 ### No drone detections
 - Confirm firmware is flashed and running (`pio device monitor`)
-- Verify the WiFi channel matches what your local drones broadcast on (default ch 6)
+- The dualcore build in this fork hops channels 1–11; upstream builds sit on channel 6, so
+  they miss drones that beacon on other channels
+- On this fork's dualcore build, read the once-a-minute status line: if `wifi_frames` and
+  `ble_adv` keep climbing while `odid_wifi`, `odid_ble` and `dji` stay at 0, the radios
+  work and nothing is broadcasting nearby
 - Check that the Heltec is in serial mode at 115200, RX=19, TX=20
 - Some drones don't broadcast Remote ID - required in many jurisdictions but not universal
 
@@ -529,6 +652,8 @@ tail -f mapper.log             # what's it saying?
 ```
 drone-mesh-mapper/
 |-- mesh-mapper.py              # Flask + SocketIO server, all UI inline
+|-- flightlog/                  # This fork: the flight-first logger (see flightlog/README.md)
+|-- docs/plans/                 # This fork: design notes for planned work
 |-- requirements.txt
 |-- static/                     # Vendored UI assets (offline-capable)
 |   |-- leaflet/                # Leaflet 1.9.4
@@ -540,9 +665,9 @@ drone-mesh-mapper/
 |   `-- README.md               # Tile import / format notes
 |-- tools/
 |   `-- cache_tiles.py          # CLI tile pre-cacher
-|-- RPI/                        # Raspberry Pi installer scripts
+|-- RPI/                        # Raspberry Pi installers (install_rpi.py, install_flightlog.py)
 |-- node-mode-dualcore/         # ESP32-S3 dual-role firmware
-|-- remoteid-mesh-dualcore/     # ESP32-S3 BLE+WiFi firmware
+|-- remoteid-mesh-dualcore/     # ESP32-S3 BLE+WiFi firmware (reworked in this fork)
 |-- remoteid-mesh/              # Single-core mesh firmware
 |-- remoteid-c5-5g/             # ESP32-C5 5GHz firmware
 `-- firmware/                   # Additional firmware variants
@@ -565,6 +690,10 @@ MIT - see [LICENSE](LICENSE).
 - **Cemaxecuter** / **alphafox02** - original RID firmware
 - **Luke Switzer** - firmware contributions
 - **OpenDroneID** community - protocol & specs (Apache 2.0)
+- **Freek van Tienen** and **Jan Dumon** - the DJI DroneID decoding, as published in Kismet's
+  `dot11_ie_221_dji_droneid` definition, which this fork's DJI parser follows
+- **tsuinami-r1/drone-mesh-5plus** (MIT; no longer online) - a comparison with that fork surfaced
+  several of the upstream firmware bugs fixed here
 - **OpenStreetMap**, **Esri**, **CARTO**, **OpenTopoMap** - tile providers
 - **MapLibre GL** + **Leaflet** + **Nominatim** - open mapping stack
 - **ADS-B receivers** - built on the shoulders of [dump1090](https://github.com/MalcolmRobb/dump1090) (Malcolm Robb / mutability), [readsb](https://github.com/wiedehopf/readsb) + [tar1090](https://github.com/wiedehopf/tar1090) (wiedehopf), and [pyModeS](https://github.com/junzis/pyModeS) (junzis) for Mode-S/CPR decode. The Beast TCP path uses pyModeS directly; the JSON path is compatible with all of the above. Network sources: [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi), [airplanes.live](https://airplanes.live), [OpenSky](https://opensky-network.org), [ADSBexchange](https://adsbexchange.com).

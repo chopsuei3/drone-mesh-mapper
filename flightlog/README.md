@@ -50,6 +50,15 @@ RPI/install_flightlog.py
 mapper_test/        optional, generates test traffic
 ```
 
+**Simplest: clone the fork on the Pi.** It already has the right layout:
+
+```sh
+git clone https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
+```
+
+Then skip straight to the install step below; later updates are a `git pull`
+followed by `sudo systemctl restart flightlog`.
+
 **Already copied the whole repo to the Pi?** Then there is nothing to move — `cd`
 into that directory and skip straight to the install step below. The repo root
 already has the right layout.
