@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set page = 'drones' %}
+{% block title %}Drone &middot; flightlog{% endblock %}
+{% block body %}
+<div class="split">
+  <section class="pane-table">
+    <div class="filters">
+      <a href="/drones" style="color:var(--accent); text-decoration:none">&larr; all drones</a>
+      <span class="spacer"></span>
+      <span id="dtitle" class="dim"></span>
+    </div>
+    <div style="flex:0 0 auto; padding:12px; overflow:auto; max-height:46%">
+      <div class="cards" id="summary"></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Start</th><th class="num">Duration</th><th class="num">Distance</th>
+          <th class="num">Max alt</th><th class="num">Points</th><th>MAC</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="pane-map">
+    <div id="map"></div>
+    <div class="maphint" id="mapHint">All flights for this drone</div>
+  </section>
+</div>
+<script>window.DRONE_ID = {{ drone_id }};</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/drone.js') }}"></script>
+{% endblock %}

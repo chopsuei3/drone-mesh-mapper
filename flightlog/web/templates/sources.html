@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% set page = 'sources' %}
+{% block title %}Sources &middot; flightlog{% endblock %}
+{% block body %}
+<div class="page">
+  <h2 class="section">Serial devices</h2>
+  <p class="dim" style="margin:-6px 0 12px; max-width:70ch">
+    Tick the port your node is on. Selections persist across restarts and reconnect
+    automatically when the device reappears.
+    <b>A port can only be held by one program at a time</b> &mdash; if
+    <code>mesh-mapper.py</code> is running against this board, stop it first.
+  </p>
+  <div id="ports" class="cards"></div>
+
+  {# Deliberately outside #ports: sources.js rebuilds that every 4 s, which would
+     wipe the scroll position, the pause state and the port picker. #}
+  <style>
+    .rawbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px; }
+    .rawbar select {
+      background: var(--bg); color: var(--text); border: 1px solid var(--line);
+      border-radius: 5px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+    }
+    .rawview {
+      height: 340px; overflow: auto; overflow-anchor: none;
+      background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+      padding: 6px 8px; white-space: pre-wrap; word-break: break-all; line-height: 1.5;
+    }
+    .rawview:focus { outline: none; border-color: var(--accent-dim); }
+    .rawview .rt, .rawview .rp { color: var(--dim); }
+    .rawview .rl-detection .rk { color: var(--ok); }
+    .rawview .rl-heartbeat { color: var(--dim); }
+    .rawview .rl-other .rk { color: var(--warn); }
+    .rawview .rl-sent { color: var(--accent); background: rgba(79,195,247,.08); }
+    .rawview .rl-gap { color: var(--dim); font-style: italic; }
+  </style>
+  <h2 class="section" style="margin-top:22px">Raw serial output</h2>
+  <div class="card">
+    <div class="rawbar">
+      <label class="dim" for="rawPort">port</label>
+      <select id="rawPort"><option value="">all ports</option></select>
+      <button id="rawPause" aria-pressed="false">Pause</button>
+      <button id="rawClear">Clear view</button>
+      <span id="rawState" class="dim" style="font-size:11.5px"></span>
+      <span class="spacer dim mono">
+        <span style="color:var(--ok)">DET</span> detection &nbsp;
+        HB heartbeat/status &nbsp;
+        <span style="color:var(--warn)">MSG</span> other &nbsp;
+        <span style="color:var(--accent)">TX&gt;</span> sent host &rarr; device
+      </span>
+    </div>
+    <div id="rawView" class="rawview mono" role="log" aria-live="off" tabindex="0"></div>
+    <div id="rawNote" class="dim mono" style="margin-top:8px; font-size:11px"></div>
+  </div>
+
+  <style>
+    .ncard input:not([type=checkbox]), .ncard select {
+      background: var(--bg); color: var(--text); border: 1px solid var(--line);
+      border-radius: 5px; padding: 5px 8px; font: inherit; font-size: 12.5px; min-width: 0;
+    }
+    .ncard input:focus, .ncard select:focus { outline: none; border-color: var(--accent-dim); }
+    .ncard .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .ncard .row > input, .ncard .row > select { flex: 1 1 160px; }
+    .ncard [hidden] { display: none !important; }   /* .row's flex would override it */
+    .ncard .chan { border-top: 1px solid var(--line); padding: 8px 0; }
+    .ncard .chan:first-child { border-top: 0; padding-top: 0; }
+    .ncard .sub { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+    .ncard .st-sent { color: var(--ok); }
+    .ncard .st-failed { color: var(--bad); }
+    .ncard .st-suppressed { color: var(--dim); }
+    .ncard details summary { cursor: pointer; color: var(--accent); }
+    .ncard label.pick { display: flex; flex-direction: column; gap: 3px; flex: 1 1 160px;
+                        color: var(--dim); font-size: 11.5px; }
+  </style>
+  <h2 class="section" style="margin-top:22px">Notifications</h2>
+  <p class="dim" style="margin:-6px 0 12px; max-width:70ch">
+    An alert goes out when a drone takes off &mdash; as soon as it has a GPS fix, or
+    after a short wait without one. Everything here is also available over the API
+    (<span class="mono">/api/notify/&hellip;</span>, <span class="mono">/api/settings</span>).
+  </p>
+  <div class="card ncard" style="max-width:760px">
+    <div id="nChannels" class="dim">loading&hellip;</div>
+
+    <details id="nAddBox" style="margin-top:12px">
+      <summary>Add a channel</summary>
+      <div style="margin-top:8px; display:grid; gap:8px">
+        <div class="row">
+          <select id="nType" aria-label="service">
+            <option value="discord">Discord</option>
+            <option value="pushbullet">Pushbullet</option>
+          </select>
+          <input id="nName" placeholder="name (optional)" aria-label="channel name">
+        </div>
+        <div class="row" data-for="discord">
+          <input id="nWebhook" placeholder="webhook URL (Server Settings &rarr; Integrations &rarr; Webhooks &rarr; Copy URL)"
+                 aria-label="Discord webhook URL" autocomplete="off" style="flex-basis:100%">
+          <input id="nUsername" placeholder="post as (optional)" aria-label="Discord username">
+          <input id="nMention" placeholder="mention: @here or &lt;@&amp;role_id&gt; (optional)" aria-label="mention">
+        </div>
+        <div class="row" data-for="pushbullet" hidden>
+          <input id="nToken" type="password" placeholder="access token (pushbullet.com &rarr; Settings &rarr; Access Tokens)"
+                 aria-label="Pushbullet access token" autocomplete="off" style="flex-basis:100%">
+          <input id="nDevice" placeholder="device iden (optional; default all devices)" aria-label="device iden">
+          <input id="nChanTag" placeholder="channel tag (optional)" aria-label="channel tag">
+        </div>
+        <div class="row">
+          <label class="dim" for="nMode">alert on</label>
+          <select id="nMode" style="flex:0 1 auto">
+            <option value="any">any drone</option>
+            <option value="only">only chosen drones, groups or tags</option>
+          </select>
+          <label class="dim" for="nCool">cooldown</label>
+          <input id="nCool" value="15" inputmode="numeric" style="flex:0 0 56px">
+          <span class="dim">min per drone</span>
+        </div>
+        <div class="row" id="nPickAny">
+          <label class="pick">except these drones (e.g. your own)
+            <select id="nExclude" multiple size="4"></select></label>
+        </div>
+        <div class="row" id="nPickOnly" hidden>
+          <label class="pick">drones<select id="nDrones" multiple size="5"></select></label>
+          <label class="pick">groups<select id="nGroups" multiple size="5"></select></label>
+          <label class="pick">tags<select id="nTags" multiple size="5"></select></label>
+        </div>
+        <div class="sub">Ctrl/Cmd-click to choose several.</div>
+        <div class="row">
+          <button id="nAdd" class="primary">Add channel</button>
+          <span id="nMsg" class="dim"></span>
+        </div>
+      </div>
+    </details>
+
+    <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px; display:grid; gap:6px">
+      <label><input type="checkbox" id="setNotify"> send alerts <span class="dim">(master switch)</span></label>
+      <label><input type="checkbox" id="setFaa"> look up new serials in the FAA registry
+        <span class="dim">(make and model; appears on the drone page and in alerts)</span></label>
+      <div class="row">
+        <input id="setBase" placeholder="link base for alerts, e.g. http://raspberrypi.local:5001" aria-label="link base URL">
+        <button id="setBaseSave">Save</button>
+      </div>
+      <div class="sub">The address you open flightlog at. Alerts link back to the drone&rsquo;s page when it is set.</div>
+      <span id="setMsg" class="dim"></span>
+    </div>
+
+    <div style="margin-top:14px; border-top:1px solid var(--line); padding-top:10px">
+      <div class="dim" style="margin-bottom:4px">Recent deliveries</div>
+      <div id="nLog" class="dim">&mdash;</div>
+    </div>
+  </div>
+
+  <h2 class="section" style="margin-top:22px">Geofences</h2>
+  <div class="card" style="max-width:640px">
+    <div id="fenceList" class="dim">loading&hellip;</div>
+    <div style="margin-top:10px; display:grid; gap:6px">
+      <input id="fName" placeholder="fence name">
+      <div style="display:flex; gap:6px">
+        <input id="fLat" placeholder="centre lat" style="flex:1">
+        <input id="fLon" placeholder="centre lon" style="flex:1">
+        <input id="fRad" placeholder="radius m" style="width:100px" value="500">
+      </div>
+      <button id="fAdd">Add circular fence</button>
+    </div>
+    <div class="dim" style="margin-top:8px; font-size:11.5px">
+      Enter/exit alerts are keyed to the drone, not its MAC, so a MAC rotation
+      inside a fence no longer re-fires an enter alert.
+    </div>
+  </div>
+
+  <h2 class="section" style="margin-top:22px">Database</h2>
+  <div class="card" style="max-width:640px" id="maintCard"></div>
+
+  <h2 class="section" style="margin-top:22px">HTTP ingest</h2>
+  <div class="card" style="max-width:640px">
+    <div class="kv"><span>endpoint</span><span class="mono">POST /api/detections</span></div>
+    <div class="kv"><span>format</span><span class="mono">same JSON the firmware emits</span></div>
+    <div style="margin-top:8px" class="dim">
+      Use this to feed the app while the legacy mapper holds the hardware:<br>
+      <span class="mono">python mapper_test/mapper_test.py --port 5001 --duration 5</span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/sources.js') }}"></script>
+{% endblock %}

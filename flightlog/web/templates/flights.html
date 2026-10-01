@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set page = 'flights' %}
+{% block title %}Flights &middot; flightlog{% endblock %}
+
+{% block body %}
+<div class="split">
+  <section class="pane-table">
+
+    <div class="filters">
+      <input type="search" id="q" placeholder="drone, serial, MAC, group&hellip;">
+      <label>from</label><input type="date" id="from">
+      <label>to</label><input type="date" id="to">
+      <select id="tag">
+        <option value="">any tag</option>
+        <option>civilian</option><option>police</option><option>government</option>
+        <option>military</option><option>commercial</option><option>known</option>
+        <option>unknown</option>
+      </select>
+      <select id="group"><option value="">any group</option></select>
+      <select id="track">
+        <option value="">with &amp; without track</option>
+        <option value="1">has track</option>
+        <option value="0">no track only</option>
+      </select>
+      <button id="reset">Reset</button>
+      <span class="spacer"></span>
+      <button id="expCsv" title="Summary rows only - no flight path">Export CSV</button>
+      <button id="expKml">KML</button>
+      <button id="expGpx">GPX</button>
+    </div>
+
+    <div class="selbar hidden" id="selbar">
+      <span><span class="count" id="selCount">0</span> selected</span>
+      <button id="plotSel" class="primary">Plot on map</button>
+      <button id="fitSel">Zoom to</button>
+      <button id="mergeSel" title="Join flights the 60s gap split across an RF dropout">Merge</button>
+      <button id="clearSel">Clear</button>
+      <span class="spacer"></span>
+      <span class="dim" id="selSummary"></span>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="nosort"><input type="checkbox" id="selAll"></th>
+            <th data-sort="started_at">Start</th>
+            <th data-sort="drone">Drone</th>
+            <th data-sort="group">Group</th>
+            <th data-sort="duration" class="num">Duration</th>
+            <th data-sort="distance" class="num">Distance</th>
+            <th data-sort="max_alt"  class="num">Max alt</th>
+            <th data-sort="max_speed" class="num">Max spd</th>
+            <th data-sort="points"   class="num">Points</th>
+            <th data-sort="rssi"     class="num">RSSI</th>
+            <th class="nosort">Start coord</th>
+            <th class="nosort">End coord</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty" style="display:none">No flights match these filters.</div>
+    </div>
+
+    <div class="pager">
+      <button id="prev">&larr; Prev</button>
+      <span id="range" class="dim"></span>
+      <button id="next">Next &rarr;</button>
+      <span class="spacer dim" id="altNote">Altitudes are MSL, as broadcast</span>
+    </div>
+  </section>
+
+  <section class="pane-map">
+    <div id="map"></div>
+    <div class="maphint" id="mapHint">Select flights to plot them here</div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/flights.js') }}"></script>
+{% endblock %}

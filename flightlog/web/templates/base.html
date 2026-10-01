@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}flightlog{% endblock %}</title>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/vendor/fonts/orbitron.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">flight<span>log</span></a>
+  <nav>
+    <a href="/"          class="{{ 'on' if page == 'flights'  }}">Flights</a>
+    <a href="/live"      class="{{ 'on' if page == 'live'     }}">Live</a>
+    <a href="/drones"    class="{{ 'on' if page == 'drones'   }}">Drones &amp; Groups</a>
+    <a href="/analysis"  class="{{ 'on' if page == 'analysis' }}">Analysis</a>
+    <a href="/sources"   class="{{ 'on' if page == 'sources'  }}">Sources</a>
+  </nav>
+  <div class="stats" id="headerStats"></div>
+</header>
+
+{% block body %}{% endblock %}
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

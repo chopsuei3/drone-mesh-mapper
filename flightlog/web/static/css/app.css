@@ -1,0 +1,149 @@
+:root {
+  --bg:        #0a0e14;
+  --panel:     #121821;
+  --panel-2:   #18202b;
+  --line:      #243040;
+  --text:      #c8d4e0;
+  --dim:       #6b7c90;
+  --accent:    #4fc3f7;
+  --accent-dim:#1d5c78;
+  --ok:        #6ee7a8;
+  --warn:      #ffb454;
+  --bad:       #ff6b7a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font: 13px/1.45 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* ---- top bar ---------------------------------------------------------- */
+.topbar {
+  display: flex; align-items: center; gap: 22px;
+  padding: 0 16px; height: 46px; flex: 0 0 46px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.brand {
+  font-family: Orbitron, ui-sans-serif, sans-serif;
+  font-weight: 700; font-size: 15px; letter-spacing: 1px;
+  color: var(--text); text-decoration: none;
+}
+.brand span { color: var(--accent); }
+.topbar nav { display: flex; gap: 4px; }
+.topbar nav a {
+  color: var(--dim); text-decoration: none; padding: 5px 11px;
+  border-radius: 5px; font-size: 12.5px;
+}
+.topbar nav a:hover { color: var(--text); background: var(--panel-2); }
+.topbar nav a.on { color: var(--accent); background: var(--panel-2); }
+.stats { margin-left: auto; display: flex; gap: 18px; color: var(--dim); font-size: 12px; }
+.stats b { color: var(--text); font-weight: 600; }
+
+/* ---- layout ----------------------------------------------------------- */
+.split { flex: 1; display: flex; min-height: 0; }
+.pane-table { flex: 1 1 58%; display: flex; flex-direction: column; min-width: 0; }
+.pane-map   { flex: 1 1 42%; border-left: 1px solid var(--line); position: relative; min-width: 0; }
+#map { position: absolute; inset: 0; background: #0d1117; }
+
+/* ---- filter bar ------------------------------------------------------- */
+.filters {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 9px 12px; background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.filters input, .filters select {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 5px 8px; font: inherit; font-size: 12.5px;
+}
+.filters input:focus, .filters select:focus { outline: none; border-color: var(--accent-dim); }
+.filters input[type=search] { min-width: 190px; }
+.filters label { color: var(--dim); font-size: 11.5px; }
+
+button {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer;
+}
+button:hover { border-color: var(--accent-dim); color: #fff; }
+button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #eaf6ff; }
+button:disabled { opacity: .45; cursor: default; }
+
+.selbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px; background: var(--panel-2);
+  border-bottom: 1px solid var(--line); font-size: 12.5px;
+}
+.selbar.hidden { display: none; }
+.selbar .count { color: var(--accent); font-weight: 600; }
+.spacer { margin-left: auto; }
+
+/* ---- table ------------------------------------------------------------ */
+.tablewrap { flex: 1; overflow: auto; min-height: 0; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--panel); color: var(--dim);
+  text-align: left; font-weight: 600; font-size: 11px;
+  letter-spacing: .04em; text-transform: uppercase;
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+  white-space: nowrap; cursor: pointer; user-select: none;
+}
+thead th:hover { color: var(--text); }
+thead th.nosort { cursor: default; }
+thead th .arrow { color: var(--accent); margin-left: 3px; }
+tbody td {
+  padding: 7px 10px; border-bottom: 1px solid #1a222d; white-space: nowrap;
+}
+tbody tr:hover { background: #161f2b; }
+tbody tr.sel { background: #16283a; }
+tbody tr.open td { color: var(--ok); }
+td.num { text-align: right; }
+td.dim, .dim { color: var(--dim); }
+.mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px; }
+
+.swatch {
+  display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+  margin-right: 6px; vertical-align: middle;
+}
+.badge {
+  display: inline-block; padding: 1px 6px; border-radius: 9px;
+  font-size: 10.5px; border: 1px solid var(--line); color: var(--dim);
+}
+.badge.notrack { color: var(--warn); border-color: #4a3a20; }
+.badge.live    { color: var(--ok);   border-color: #1f4636; }
+.badge.suspect { color: var(--bad);  border-color: #4a2027; }
+
+.empty { padding: 40px; text-align: center; color: var(--dim); }
+.pager { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+         border-top: 1px solid var(--line); background: var(--panel); font-size: 12.5px; }
+
+/* ---- map bits --------------------------------------------------------- */
+.leaflet-container { background: #0d1117; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+}
+.maphint {
+  position: absolute; left: 10px; bottom: 10px; z-index: 500;
+  background: rgba(18,24,33,.9); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 9px; color: var(--dim); font-size: 11.5px;
+}
+
+/* ---- simple cards / charts (drones, analysis) ------------------------- */
+.page { flex: 1; overflow: auto; padding: 16px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 12px; }
+.card h3 { margin: 0 0 8px; font-size: 13.5px; }
+.card .kv { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; }
+.card .kv span:first-child { color: var(--dim); }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 130px; margin-top: 10px; }
+.bars div { flex: 1; background: var(--accent-dim); border-radius: 2px 2px 0 0; min-height: 2px; }
+.bars div:hover { background: var(--accent); }
+.axis { display: flex; gap: 3px; color: var(--dim); font-size: 10px; margin-top: 4px; }
+.axis span { flex: 1; text-align: center; }
+h2.section { margin: 4px 0 12px; font-size: 15px; font-weight: 600; }

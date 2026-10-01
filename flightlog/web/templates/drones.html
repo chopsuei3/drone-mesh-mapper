@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% set page = 'drones' %}
+{% block title %}Drones &amp; Groups &middot; flightlog{% endblock %}
+{% block body %}
+<div class="page">
+  <h2 class="section">Groups</h2>
+  <div class="filters" style="border:1px solid var(--line); border-radius:7px; margin-bottom:14px">
+    <input id="gname" placeholder="new group name (agency, fleet, operator&hellip;)">
+    <input id="gcolor" type="color" value="#4fc3f7" style="padding:2px; width:44px">
+    <button id="gadd" class="primary">Add group</button>
+  </div>
+  <div class="cards" id="groups"></div>
+
+  <h2 class="section" style="margin-top:22px">Drones</h2>
+  <div class="filters" style="border:1px solid var(--line); border-radius:7px; margin-bottom:14px">
+    <input type="search" id="dq" placeholder="search label, serial, MAC&hellip;">
+  </div>
+  <div class="cards" id="drones"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/drones.js') }}"></script>
+{% endblock %}

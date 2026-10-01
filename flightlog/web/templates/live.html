@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% set page = 'live' %}
+{% block title %}Live &middot; flightlog{% endblock %}
+{% block body %}
+<div class="split">
+  <section class="pane-map" style="flex:1 1 100%; border-left:none">
+    <div id="map"></div>
+    <div class="maphint" id="mapHint">Nothing airborne right now</div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/live.js') }}"></script>
+{% endblock %}

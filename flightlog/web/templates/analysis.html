@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% set page = 'analysis' %}
+{% block title %}Analysis &middot; flightlog{% endblock %}
+{% block body %}
+<style>
+  /* Chart colours are dark-mode steps of the documented dataviz palette,
+     checked against --panel (#121821) with the skill's validator:
+     bars #3987e5 4.90:1; markers #d95926 >= 3.3:1 on OSM land, parks and
+     satellite, with ink count labels (5.07:1) as the relief over water. */
+  .an {
+    --bar: #3987e5;
+    --bar-muted: #6b7c90;
+    --zero: #18202b;          /* an empty heat cell, distinct from the lowest step */
+  }
+  .an .an-body { transition: opacity .15s; }
+  .an.stale .an-body { opacity: .5; }
+  .an-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .an-tile .lbl { color: var(--dim); font-size: 12px; }
+  .an-tile .val { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .an-tile .sub { color: var(--dim); font-size: 11.5px; min-height: 16px; }
+  .an-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 24px 0 10px; }
+  .an-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .an-head .note { color: var(--dim); font-size: 11.5px; }
+  .an-head .tools { margin-left: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .an-empty { color: var(--dim); padding: 6px 0; }
+
+  /* hour x weekday heatmap, with its two margins */
+  .hm { display: grid; grid-template-columns: 34px repeat(24, minmax(0, 1fr)) 128px; gap: 2px; }
+  .hm .rl { color: var(--dim); font-size: 11px; align-self: center; }
+  .hm .c { height: 24px; border-radius: 2px; background: var(--zero); font-size: 10px;
+           display: flex; align-items: center; justify-content: center;
+           font-variant-numeric: tabular-nums; }
+  .hm .c:hover { outline: 1px solid var(--text); outline-offset: -1px; }
+  .hm .rt { display: flex; align-items: center; gap: 6px; padding-left: 8px;
+            color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .hm .rt .b { height: 12px; background: var(--bar); border-radius: 0 4px 4px 0; flex: none; }
+  .hm .ct { height: 58px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+  .hm .ct .b { width: 70%; max-width: 24px; background: var(--bar); border-radius: 4px 4px 0 0; }
+  .hm .ct .v { color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .hm .hl { color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .ramp { display: inline-flex; align-items: center; gap: 2px; color: var(--dim); font-size: 11px; }
+  .ramp i { width: 16px; height: 10px; border-radius: 2px; }
+  .ramp span { margin: 0 4px; }
+
+  /* map */
+  .an-map { position: relative; height: 480px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent-dim); color: #eaf6ff; }
+  .leaflet-tooltip.an-count { background: none; border: 0; box-shadow: none; padding: 0;
+                              color: #0b0b0b; font-weight: 700; font-size: 11px; }
+  .leaflet-tooltip.an-count::before { display: none; }
+  .an-legend { position: absolute; left: 10px; bottom: 10px; z-index: 500;
+               background: rgba(18,24,33,.92); border: 1px solid var(--line); border-radius: 5px;
+               padding: 6px 9px; color: var(--dim); font-size: 11px; }
+  .an-legend svg { display: block; }
+  .an-pop b { font-size: 13px; }
+  .an-pop .sub { color: var(--dim); margin: 2px 0 6px; }
+  .an-pop .r { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  .an-pop .r a { color: var(--text); flex: 1; text-decoration: none; }
+  .an-pop .r a:hover { color: var(--accent); text-decoration: underline; }
+  .an-pop .r .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* tables */
+  .an table td, .an table th { padding: 6px 8px; }
+  .an tbody tr.go { cursor: pointer; }
+  .an td a { color: var(--text); text-decoration: none; }
+  .an td a:hover { color: var(--accent); text-decoration: underline; }
+  .an th.r { text-align: right; }
+  .strip { display: inline-flex; gap: 1px; vertical-align: middle; }
+  .strip i { width: 5px; height: 12px; border-radius: 1px; background: var(--zero); }
+  .ibar { display: inline-block; height: 6px; background: var(--bar); border-radius: 0 3px 3px 0;
+          margin-left: 8px; vertical-align: middle; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+  .linkish:hover { text-decoration: underline; color: var(--accent); }
+
+  /* horizontal bar lists: models, radio */
+  .an-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+  .bl { display: grid; grid-template-columns: minmax(90px, 36%) 1fr; gap: 7px 10px; align-items: center; font-size: 12px; }
+  .bl .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bl .t { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .bl .b { height: 14px; background: var(--bar); border-radius: 0 4px 4px 0; flex: none; }
+  .bl .b.muted { background: var(--bar-muted); }
+  .bl .v { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  .an-tip { position: fixed; z-index: 2000; pointer-events: none; max-width: 280px;
+            background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+            padding: 5px 8px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  .an-tip b { display: block; font-weight: 600; }
+  .an-tip span { color: var(--dim); }
+</style>
+
+<div class="filters">
+  <label for="fRange">range</label>
+  <select id="fRange">
+    <option value="all">All time</option>
+    <option value="1">Last 24 hours</option>
+    <option value="7">Last 7 days</option>
+    <option value="30">Last 30 days</option>
+    <option value="90">Last 90 days</option>
+    <option value="365">Last year</option>
+    <option value="custom">Custom&hellip;</option>
+  </select>
+  <span id="fCustom" hidden>
+    <input type="date" id="fFrom" aria-label="from date">
+    <span class="dim">to</span>
+    <input type="date" id="fTo" aria-label="to date">
+  </span>
+  <label for="fGroup">group</label>
+  <select id="fGroup"><option value="">all groups</option></select>
+  <label for="fDrone">drone</label>
+  <select id="fDrone"><option value="">all drones</option></select>
+  <label for="fTag">tag</label>
+  <select id="fTag"><option value="">all tags</option></select>
+  <button id="fReset">Reset</button>
+  <span class="spacer dim" id="fStatus"></span>
+</div>
+
+<div class="page an" id="an">
+  <div class="an-body">
+    <div class="an-tiles" id="tiles"></div>
+
+    <div class="an-head">
+      <h2>When</h2>
+      <span class="note">flight starts by hour and weekday &middot; Pi local time</span>
+      <div class="tools">
+        <span class="ramp" id="hmLegend"></span>
+        <label class="dim"><input type="checkbox" id="hmNums"> show numbers</label>
+      </div>
+    </div>
+    <div class="card"><div class="hm" id="heat"></div></div>
+
+    <div class="an-head">
+      <h2>Where</h2>
+      <span class="note" id="mapNote"></span>
+      <div class="tools">
+        <div class="seg" role="group" aria-label="positions to map">
+          <button id="kLaunch" aria-pressed="true">Launch points</button>
+          <button id="kPilot" aria-pressed="false">Operator positions</button>
+        </div>
+      </div>
+    </div>
+    <div class="an-map"><div id="map"></div><div class="an-legend" id="mapLegend" hidden></div></div>
+
+    <div class="an-head">
+      <h2>Who</h2>
+      <span class="note">click a row to focus the whole page on that group or drone</span>
+    </div>
+    <div class="card" style="margin-bottom:12px; max-width:760px"><table id="groups"></table></div>
+    <div class="card" style="overflow-x:auto"><table id="drones"></table><div id="dronesMore"></div></div>
+
+    <div class="an-head"><h2>What &amp; how</h2></div>
+    <div class="an-two">
+      <div class="card">
+        <h3>Models <span class="dim" style="font-weight:400">&middot; FAA declaration, by number of drones</span></h3>
+        <div class="bl" id="models"></div>
+      </div>
+      <div class="card">
+        <h3>How they were heard <span class="dim" style="font-weight:400">&middot; detections by radio</span></h3>
+        <div class="bl" id="radio"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="an-tip" id="tip" role="tooltip" hidden></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/analysis.js') }}"></script>
+{% endblock %}
