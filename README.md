@@ -53,8 +53,15 @@ and listed in a table you can sort, filter and export.
 - **Analysis**: an hour × weekday heatmap, launch points and operator positions on a map,
   per-drone and per-group breakdowns, the model mix, and how drones were heard (BLE, Wi-Fi
   channel, DJI DroneID) — all scoped by one filter row.
-- **Node health**: a raw serial view on the Sources page, a rotating log file, and an
-  alive/silent status for each port.
+- **City-wide tracking**: XIAOs at other sites, each on a Raspberry Pi running a small relay,
+  all feed one flightlog over Tailscale. A flight two sites hear is one flight, *heard by*
+  both. The relay spools everything until the server has it, so outages lose nothing.
+  A Nodes page shows every receiver's health and gives remote commands and raw output.
+  Analysis shows each receiver's range and coverage, and channels can alert when a node
+  goes offline or its XIAO crashes. Setup:
+  [More receivers](flightlog/README.md#more-receivers-relays-at-other-sites).
+- **Node health**: a raw serial view (every receiver's, local and remote), a rotating log file,
+  and an alive/silent status for each port.
 - Geofences with enter/exit webhooks, offline MBTiles basemaps (shared with `mesh-mapper.py`),
   optional retention, a Raspberry Pi installer that sets up a systemd service, and an importer
   for `mesh-mapper.py`'s CSV history.
@@ -89,13 +96,10 @@ variants are unchanged from upstream.
 - The **Web Flasher and the prebuilt binaries in `firmware/` are upstream's**. They do not
   include the firmware changes above; build `remoteid-mesh-dualcore` from source.
 - **`node-mode-dualcore`** still has the Wi-Fi NAN crash fixed above in the dualcore build.
-- flightlog has **no authentication** (see above).
-
-### Planned
-
-**City-wide tracking**: XIAOs at several sites, each with a Raspberry Pi relay, all feeding one
-flightlog over Tailscale, with node health, "heard by" coverage and offline alerts. The design is
-in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md); it is not started yet.
+- flightlog has **no authentication** (see above). Remote relays authenticate with a token
+  each, but the web UI does not; keep it on your LAN or tailnet.
+- The dualcore firmware **does not read serial input**. The Nodes page's STATUS and
+  WATCHDOG_RESET reach the XIAO's port but get no reply.
 
 ### Changes so far
 
@@ -110,6 +114,9 @@ in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md); it is n
 - **Firmware**: the crash and dropped-detection fixes, and DJI DroneID — with flightlog support
   for DJI drones (their home point is labelled as such, and they are never sent to the FAA
   lookup).
+- **flightlog**: city-wide tracking — remote relays (`python -m flightlog.relay`,
+  `RPI/install_relay.py`), the Nodes page, heard-by and coverage, and node alerts. The design
+  is in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md).
 
 ---
 
@@ -182,6 +189,14 @@ The installer installs the dependencies, sets up and starts a `flightlog` system
 port 5001, and prints the address to open. Then open **Sources**, tick the XIAO's serial port,
 and wait for it to show `alive`. Details, upgrades and troubleshooting:
 [flightlog/README.md](flightlog/README.md).
+
+### flightlog relay (a XIAO at another site)
+Add the node on flightlog's **Nodes** page; it shows a one-time install command. On the remote
+Raspberry Pi, with Tailscale up on both machines and `flightlog/` and `RPI/` copied across:
+```bash
+python3 RPI/install_relay.py --server http://homepi:5001 --token flr_... --name north
+```
+Step by step: [More receivers](flightlog/README.md#more-receivers-relays-at-other-sites).
 
 ### mesh-mapper.py — automated (Raspberry Pi)
 ```bash

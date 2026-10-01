@@ -1,9 +1,38 @@
 # City-wide tracking: remote XIAO nodes feeding one flightlog
 
-> **Status: saved for future implementation, not started (2026-09-30).**
-> Prerequisite: flash the pending dualcore firmware (NAN/boot-crash fixes and DJI
-> DroneID) and deploy the matching flightlog files first. Decisions already taken:
-> Tailscale, a Raspberry Pi relay at each site, and all four management features.
+> **Status: implemented on branch `city-wide-tracking` (2026-09-30), one commit per
+> milestone; not yet tried on real Pis.** How to set it up is in
+> [flightlog/README.md](../../flightlog/README.md#more-receivers-relays-at-other-sites).
+> Decisions already taken: Tailscale, a Raspberry Pi relay at each site, and all four
+> management features.
+
+## Where the build differs from this design
+
+- **Coverage has its own table, `node_samples`.** A reading another node already
+  delivered is stored only as a reception, so detections alone would hide most of what
+  a second node hears. `node_samples` keeps a thinned record of every node's positions,
+  at most one per flight and node every 2 s. Range and coverage are measured over it.
+  Retention prunes it with the detections, and merges carry it along.
+- **"Backlog" is judged by delivery delay, not by wall-clock age.** The ingest stamps
+  each relayed detection with how late it arrived (`delay`). The 60 s and 120 s rules,
+  the routing of late detections, and keeping a relay-fed flight open while its
+  backlog is still arriving all key on that. Local serial, HTTP posts and imports carry
+  no delay, so they behave exactly as before.
+- **More backlog rules than the design names:**
+  - A backlog that predates a drone's current live flight becomes a separate past
+    flight (`close_reason='backlog'`).
+  - A janitor-closed relay flight is reopened by a late detection that falls within it.
+  - A late detection covered by an already-closed flight adds receptions to it, instead
+    of opening a duplicate flight.
+- **The relay's check-in interval is configurable** (`heartbeat_s`, default 10 s). An
+  idle check-in costs about 750 bytes, roughly 7 MB a day.
+- **A remote Pi needs no `requirements.txt`.** The installer pip-installs `pyserial`
+  and `requests` directly.
+- **The node alert cooldown is fixed** at 10 minutes per channel, node and kind of
+  alert.
+- **Commands get no reply from today's XIAO firmware.** The dualcore firmware does not
+  read serial input, so STATUS and WATCHDOG_RESET reach its port and nothing answers.
+  The firmware was left alone, as decided.
 
 ## Context
 

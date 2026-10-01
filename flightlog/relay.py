@@ -53,7 +53,11 @@ SEND_AT_LINES = 200             # or at once when this many are waiting
 BATCH_LINES = 500
 BATCH_MAX_CHARS = 1500000       # the server refuses over 1 MB compressed; stay far below
 MAX_LINE_CHARS = 2000           # a line with no newline (wrong baud, a crash) is cut here
-HEARTBEAT_S = 10.0              # an empty batch this often says "relay alive, XIAO quiet"
+# An empty batch this often says "relay alive, XIAO quiet". About 750 bytes
+# each with HTTP and WireGuard overhead - ~7 MB a day at 10 s. On a metered link
+# raise it (config "heartbeat_s"); the server only calls a relay offline after
+# nodes.offline_after_s (10 min) without one.
+HEARTBEAT_S = 10.0
 BACKOFF_MAX_S = 60.0
 HTTP_TIMEOUT_S = 20.0
 STATUS_EVERY_S = 10.0           # how often the running relay records itself for --status
@@ -169,11 +173,12 @@ class Relay:
     """
 
     def __init__(self, server, token, spool_path, ports='auto', name=None, http=None,
-                 opener=None, lister=None):
+                 opener=None, lister=None, heartbeat_s=HEARTBEAT_S):
         self.server = server.rstrip('/')
         self.token = token
         self.name = name
         self.ports = ports
+        self.heartbeat_s = max(1.0, float(heartbeat_s or HEARTBEAT_S))
         self.boot = os.urandom(4).hex()
         self.started = time.monotonic()
         self.spool = Spool(spool_path)
@@ -354,7 +359,7 @@ class Relay:
 
     def run(self):
         """Send until stopped: every SEND_EVERY_S while lines wait (at once past
-        SEND_AT_LINES), an empty batch every HEARTBEAT_S, exponential back-off
+        SEND_AT_LINES), an empty batch every heartbeat_s, exponential back-off
         to BACKOFF_MAX_S while the server cannot be reached."""
         backoff = 0.0
         last_sent = 0.0
@@ -364,7 +369,7 @@ class Relay:
             if now - last_trim > 60:
                 last_trim = now
                 self.spool.trim()
-            if self.spool.depth() or self._results or now - last_sent >= HEARTBEAT_S:
+            if self.spool.depth() or self._results or now - last_sent >= self.heartbeat_s:
                 if self.send_once():
                     backoff, last_sent = 0.0, now
                     self._record_status()
@@ -525,6 +530,8 @@ def main(argv=None):
     ap.add_argument('--name', help='this node\'s name (informational)')
     ap.add_argument('--ports', help='"auto" (Espressif USB devices) or a comma-separated list')
     ap.add_argument('--spool', help='spool file (default: %s beside the config)' % SPOOL_NAME)
+    ap.add_argument('--heartbeat', type=float, dest='heartbeat_s',
+                    help='seconds between check-ins while nothing is heard (default %d)' % HEARTBEAT_S)
     ap.add_argument('--status', action='store_true', help='print spool, ports and server state')
     ap.add_argument('--replay', metavar='FILE', help='feed a capture instead of serial ports')
     ap.add_argument('--speed', type=float, default=1.0, help='replay speed-up factor')
@@ -537,7 +544,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     cfg = load_config(args.config)
-    for k in ('server', 'token', 'name', 'spool'):
+    for k in ('server', 'token', 'name', 'spool', 'heartbeat_s'):
         if getattr(args, k):
             cfg[k] = getattr(args, k)
     if args.ports:
@@ -552,7 +559,7 @@ def main(argv=None):
         ap.error('--server and --token are required (or a config file holding them)')
 
     relay = Relay(cfg['server'], cfg['token'], spool_path, ports=cfg.get('ports') or 'auto',
-                  name=cfg.get('name'))
+                  name=cfg.get('name'), heartbeat_s=cfg.get('heartbeat_s') or HEARTBEAT_S)
 
     def _term(signum, frame):
         logger.info("stopping (signal %s); %d lines stay spooled", signum, relay.spool.depth())

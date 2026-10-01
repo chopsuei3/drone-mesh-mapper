@@ -150,9 +150,11 @@ quiet for well over that is flagged `silent` — otherwise a working node with n
 drones nearby and a wedged one would look identical.
 
 To see what the node is actually printing, use **Raw serial output** on the
-Sources page: the most recent lines per port, newest at the bottom, with
+Sources page: the most recent lines per source, newest at the bottom, with
 heartbeats dimmed and the app's own writes to the device (`WATCHDOG_RESET`,
-`STATUS`) marked. The same lines go to `flightlog_serial.log` in the install
+`STATUS`) marked. Sources are named node/port: this machine's XIAO is
+`home/ttyACM0` (`home/COM3` on Windows), and a remote relay's is under its node's
+name, e.g. `north/ttyACM0`. The same lines go to `flightlog_serial.log` in the install
 directory, beside `flightlog.db` — capped at about 1 MB with two rotated backups
 — so over SSH:
 
@@ -162,6 +164,214 @@ tail -f ~/drone-mesh-mapper/flightlog_serial.log
 
 `--no-serial-log` turns the file off; the in-page view is always there.
 
+## More receivers: relays at other sites
+
+One XIAO hears a couple of kilometres. To cover more of a town, put more XIAOs at
+other sites, each plugged into a Raspberry Pi running a small **relay**. Every relay
+forwards what its XIAO prints to this flightlog over Tailscale, so every drone and
+flight lands in one database, and a flight two sites hear is one flight, *heard by*
+both.
+
+```
+site "north":  XIAO --USB-- Pi (flightlog relay) --+
+                                                   +--Tailscale--> home Pi (flightlog) <--USB-- XIAO "home"
+site "south":  XIAO --USB-- Pi (flightlog relay) --+
+```
+
+Nothing is exposed to the internet: relays reach the server over Tailscale, and each
+has its own token. The XIAO firmware is the same everywhere.
+
+### 1. Tailscale on the server
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+tailscale status                 # this machine's name, e.g. homepi
+```
+
+flightlog has to listen on every interface; the installed service already runs with
+`--host 0.0.0.0`. From another device on your tailnet, `http://homepi:5001` should
+open it. That name needs MagicDNS (on by default in the Tailscale admin console);
+the machine's `100.x.y.z` address works too.
+
+### 2. Add the node
+
+On the **Nodes** page, set *relays reach this server at* to that address
+(`http://homepi:5001`) and press Save. Then enter a name (`north`) and press
+**Create**. The new node's panel shows its **token once**, inside the command to run
+on the remote Pi:
+
+```
+python3 RPI/install_relay.py --server http://homepi:5001 --token flr_... --name north
+```
+
+Lost it? **New token** makes another, and the old one stops working at once.
+
+### 3. The remote Pi
+
+It needs two directories from this repo, `flightlog/` and `RPI/`. It does not need
+`static/` or Flask. Copy them across, or clone the repo:
+
+```sh
+ssh pi@north-pi 'mkdir -p ~/drone-mesh-mapper'
+scp -r flightlog RPI pi@north-pi:~/drone-mesh-mapper/
+```
+
+Then on that Pi:
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
+cd ~/drone-mesh-mapper
+python3 RPI/install_relay.py --server http://homepi:5001 --token flr_... --name north
+```
+
+The installer does the following, in order:
+
+1. Checks that Tailscale is up.
+2. Checks the token against the server. If it cannot get through, it stops before
+   installing anything.
+3. Installs `pyserial` and `requests`.
+4. Writes `flightlog_relay.json`, readable only by you because it holds the token.
+5. Installs and starts the `flightlog-relay` systemd service, with access to the
+   serial port, and warns if ModemManager is running.
+6. Prints the relay's status.
+
+Plug the XIAO into that Pi. The relay finds it by its Espressif USB id (`--ports auto`,
+the default); for a board behind a USB-serial bridge, name the port:
+`--ports /dev/ttyACM0`. Within seconds the node reads **online** on the Nodes page.
+
+```sh
+sudo systemctl status flightlog-relay
+journalctl -u flightlog-relay -f
+python3 -m flightlog.relay --status          # spool, last ack, ports, server check
+sudo systemctl restart flightlog-relay       # after copying new files over
+python3 RPI/install_relay.py --uninstall     # keeps the config and the spool
+```
+
+### What the relay does
+
+- **It keeps every line until the server has it.** Every line the XIAO prints goes
+  into a small SQLite spool on the Pi (`flightlog_relay.db`). It is deleted only once
+  the server confirms it stored it. A dropped link, a server restart or a Pi reboot
+  loses nothing; the backlog goes out when the link is back. The spool holds 24 hours
+  or 200,000 lines. Past that the oldest go, and the Nodes page shows how many.
+- **It times lines by the Pi's monotonic clock, not its wall clock.** Each line
+  carries its age, and the server subtracts that from its own clock. A Pi without a
+  real-time clock that boots an hour wrong still places every detection correctly;
+  the Nodes page shows its clock offset anyway. Only lines spooled before the relay
+  restarted fall back to the Pi's wall clock.
+- **A resent batch is never stored twice.** Every line has a sequence number, and the
+  server skips any it already has.
+- **It checks in every 10 s** even with nothing to send, so the server can tell
+  "relay up, XIAO quiet" from "relay gone".
+- **It can replay a capture.** `python3 -m flightlog.relay --replay capture.txt
+  --server ... --token ...` feeds a plain file of serial lines, or a
+  `flightlog_serial.log`, at its real pace instead of a XIAO. Use it to try a node
+  without hardware.
+
+### Bandwidth
+
+Batches are gzipped JSON over a kept-alive connection:
+
+- **Idle:** a check-in costs about 750 bytes with HTTP and WireGuard overhead. That is
+  roughly 7 MB a day at the default 10 s, or 1.2 MB a day with `--heartbeat 60`
+  (pass it to the installer, or set `"heartbeat_s"` in `flightlog_relay.json`).
+- **A drone in range:** adds about 1 KB a second while it is heard.
+
+That is fine on LTE. On a small data plan, raise the heartbeat. The server only calls
+a relay offline after 10 minutes without contact.
+
+### How several receivers count
+
+- **One broadcast heard by two nodes is one point.** The same position and altitude
+  from a second node within 2 s counts as a *reception*: the node is listed among those
+  that heard the flight, but adds no point, distance or speed. A node's own
+  back-to-back duplicates are still dropped by the rule above, which keys on RSSI, so a
+  hovering drone still logs every second.
+- **Points that arrive out of order count as presence.** Nodes send in batches, so
+  their points interleave late. A fix more than half a second older than the newest one
+  on the path keeps the flight alive and is stored. It does not move the path, speed,
+  bounding box or altitude extremes, so the track never zig-zags between receivers.
+- **A backlog is history, not news.** A relay's detections that arrive late are placed
+  at the times they were heard, and kept quiet:
+  - more than 60 s late, they never reach the live map;
+  - more than 120 s late, they never send a takeoff alert or a geofence alert.
+
+  Where nothing else was tracking the drone, they form ordinary flights. A backlog from
+  before a drone's current live flight becomes a separate past flight.
+- **Backlog limit:** where another receiver already recorded the flight, the late node
+  is only added as a receiver. Its points do not extend that flight or move its start.
+- **The home Pi's own XIAO is the node `home`.** Everything on the Nodes page applies to
+  it too. Detections posted to `/api/detections` (mapper_test.py) name no receiver.
+
+### The Nodes page
+
+The table shows each receiver with:
+
+- **status:** *online*, *XIAO silent*, *relay offline*, *waiting* (for first contact) or
+  *disabled*;
+- **the relay:** host, version, uptime, spool depth and clock offset;
+- **the XIAO's last status line:** the `reset` reason (highlighted after a panic,
+  watchdog or brownout), queue drops, DJI and the other counters;
+- **the last detection.**
+
+Select a node to:
+
+- rename it or add notes;
+- disable it (its batches are then refused);
+- place it on the map;
+- send STATUS or WATCHDOG_RESET to its port, and watch it go *queued → delivered →
+  result*;
+- rotate its token, or delete it;
+- open its raw serial output.
+
+**Commands get no answer from the dualcore XIAO.** Its firmware does not read serial
+input: a command reaches its port (it shows as `TX>` in the raw view) and nothing comes
+back. Node-mode home firmware answers STATUS.
+
+### Heard by and coverage
+
+- **Flight table:** the **Nodes** column lists who heard each flight, best signal
+  first; hover for receptions and best RSSI. The *receiver* filter keeps only flights a
+  node heard. It also narrows exports (`rx_node=`), and CSV exports gain a `heard_by`
+  column.
+- **Drone pages:** show every receiver that has heard that airframe.
+- **Maps:** receivers with a location show as diamonds, coloured by status.
+- **Analysis:** has a *heard by* filter and a **Receivers** table. For each node it
+  shows flights, drones, receptions and best RSSI, plus its range: the distance from
+  the node to the drone positions it heard. That is given as typical (median), far
+  (95th percentile) and farthest, over its newest 20,000 positions.
+- **Coverage** (on the Analysis map) draws each node's far range as a circle. Gaps
+  between circles are where another node would help. A node needs a location for any of
+  this.
+
+### Node alerts
+
+Tick **node problems** on a notification channel (Sources page) and it is told when:
+
+- a relay has had no contact for the threshold (default 10 minutes, set on the Nodes
+  page);
+- a XIAO has printed nothing for that long;
+- a status line shows a panic, watchdog or brownout restart;
+- a node is back.
+
+Each change alerts once. The same alert for the same node repeats on a channel at most
+every 10 minutes, so a flapping link does not flood. Existing channels keep takeoff
+alerts only.
+
+| Endpoint | |
+|---|---|
+| `GET` / `POST /api/nodes` | list (status included, never tokens) / create - returns the token once |
+| `GET` / `PATCH` / `DELETE /api/nodes/<id>` | read / `name`, `enabled`, `lat`, `lon`, `notes` / remove a relay |
+| `POST /api/nodes/<id>/token` | a new token; the old one stops working |
+| `GET` / `POST /api/nodes/<id>/commands` | recent / queue `{"port", "command": "STATUS" or "WATCHDOG_RESET"}` |
+| `POST /api/ingest` | relay batches (`Authorization: Bearer <token>`, gzip allowed, 1 MB max) |
+| `GET /api/ingest/hello` | checks a token: 200, 401 unknown or rotated, 403 disabled |
+| `GET /api/analysis/nodes` | the Receivers table, with the Analysis filters |
+
+Settings: `nodes.offline_after_s` (default 600) and `nodes.server_url` (what install
+commands use), through `PATCH /api/settings`.
+
 ## Views
 
 | Page | What it is |
@@ -170,8 +380,9 @@ tail -f ~/drone-mesh-mapper/flightlog_serial.log
 | `/live` | Everything currently airborne, pushed over SSE |
 | `/drones` | Drone identity and groups — label a *drone*, not a MAC |
 | `/drone/<id>` | One airframe's whole history, every flight on one map, MAC audit trail, FAA identification |
-| `/analysis` | When, where, who and what — hour × weekday, launch and operator spots, groups and drones, models and radio — all scoped by one filter row |
-| `/sources` | Serial ports, notifications, geofences, database maintenance |
+| `/analysis` | When, where, who and what — hour × weekday, launch and operator spots, receivers and their range, groups and drones, models and radio — all scoped by one filter row |
+| `/nodes` | Every receiver — this machine's XIAO and each remote relay — with its health, location, commands, tokens and raw output |
+| `/sources` | Serial ports, raw serial output from every receiver, notifications, geofences, database maintenance |
 
 ## Why identity is not MAC-keyed
 
@@ -256,7 +467,8 @@ come out about 137° apart. **Use default** on the Drones page clears a pick.
 ## Notifications
 
 An alert goes out when a drone **takes off** — when a new flight opens. A flight
-resuming after an RF dropout is the same flight, so it never alerts twice.
+resuming after an RF dropout is the same flight, so it never alerts twice. A channel
+can also take alerts about the receivers themselves; see *Node alerts* above.
 
 The alert goes as soon as the flight has a GPS fix, or after `notify.settle_s`
 (default 15 s) without one. If the drone's FAA lookup is still running when the
@@ -458,6 +670,20 @@ page.
   — and that *send alerts* is ticked. Both services need the Pi online.
 - **Flight table counts lag a few seconds behind a burst.** Rows are written in
   batches; the live view reads in-memory state and is never behind.
+- **A node stays *waiting*.** On its Pi, run `python3 -m flightlog.relay --status`:
+  it says whether the relay has run, how many lines are waiting, and whether the
+  server answers. `journalctl -u flightlog-relay -f` shows each failed send and why.
+- **A node shows *relay offline* but its Pi is up.** Check `tailscale status` on both
+  machines, and that the server runs with `--host 0.0.0.0`. A `401` in the relay's log
+  means its token was rotated or the node deleted: copy the new install command from
+  the Nodes page and run it again.
+- **A node shows *XIAO silent* while its relay checks in.** The XIAO is unplugged,
+  unpowered or wedged; `--status` says whether its port is connected. Unplug and replug
+  it.
+- **A late node's flights look short.** Where another receiver had already recorded the
+  flight, a backlog only adds receptions; see *How several receivers count*.
+- **Dropped lines on the Nodes page.** The relay's spool overflowed: the link was down
+  for over a day, or more than 200,000 lines piled up.
 
 ## Not carried over
 
@@ -481,10 +707,13 @@ export.py     streaming CSV / KML / GPX
 retention.py  chunked pruning + vacuum
 bus.py        event bus + SSE, coalesced
 migrate.py    legacy CSV + JSON state importer
+nodes.py      receivers: registry, tokens, status, commands, monitor; relay batch ingest
+relay.py      a remote site's relay (python -m flightlog.relay): spool + sender, no Flask
 app.py        Flask routes  (python -m flightlog runs it)
-ingest/       serial_source.py (DTR/RTS handling, one-reader-per-port guard,
-              recent-line buffer and flightlog_serial.log)
+ingest/       reader.py (SerialReader: DTR/RTS handling, one reader per port;
+              RawLog: recent lines per source and flightlog_serial.log)
+              serial_source.py (this machine's selected ports, parsed and ingested)
 services/     tiles.py  geofence.py  faa.py (FAA identification)
-              notify.py (Discord / Pushbullet takeoff alerts)
+              notify.py (Discord / Pushbullet takeoff and node alerts)
 web/          templates + static (no build step, no npm)
 ```

@@ -117,11 +117,13 @@ def check_import(install_dir):
                cwd=install_dir).returncode == 0
 
 
-def write_config(path, server, token, name, ports, spool):
+def write_config(path, server, token, name, ports, spool, heartbeat_s=None):
     cfg = {'server': server.rstrip('/'), 'token': token, 'name': name,
            'ports': 'auto' if ports == 'auto' else [p.strip() for p in ports.split(',') if p.strip()]}
     if spool:
         cfg['spool'] = spool
+    if heartbeat_s:
+        cfg['heartbeat_s'] = heartbeat_s
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w') as fh:
         json.dump(cfg, fh, indent=2)
@@ -196,6 +198,9 @@ def main():
     ap.add_argument('--ports', default='auto',
                     help='"auto" finds the XIAO by its Espressif USB id; or e.g. /dev/ttyACM0')
     ap.add_argument('--spool', help='spool file (default: flightlog_relay.db beside the config)')
+    ap.add_argument('--heartbeat', type=float,
+                    help='seconds between check-ins while nothing is heard (default 10; '
+                         'raise it on a metered LTE link)')
     ap.add_argument('--force', action='store_true',
                     help='install even if the server cannot be reached right now')
     ap.add_argument('--no-service', action='store_true', help='write the config only')
@@ -227,7 +232,7 @@ def main():
         return 1
 
     config = os.path.join(install_dir, CONFIG_NAME)
-    write_config(config, args.server, args.token, args.name, args.ports, args.spool)
+    write_config(config, args.server, args.token, args.name, args.ports, args.spool, args.heartbeat)
 
     group = serial_group()
     started = False
