@@ -239,6 +239,10 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
     def sources_page():
         return render_template('sources.html')
 
+    @app.route('/nodes')
+    def nodes_page():
+        return render_template('nodes.html')
+
     @app.route('/drone/<int:did>')
     def drone_page(did):
         return render_template('drone.html', drone_id=did)

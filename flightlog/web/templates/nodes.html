@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% set page = 'nodes' %}
+{% block title %}Nodes &middot; flightlog{% endblock %}
+{% block body %}
+<style>
+  .nd-table td { vertical-align: top; }
+  .nd-table tbody tr { cursor: pointer; }
+  .nd-table .sub { color: var(--dim); font-size: 11.5px; white-space: normal; }
+  .nd-table .port { white-space: nowrap; }
+  .nd-grid { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.1fr); gap: 12px;
+             margin-top: 12px; align-items: start; }
+  @media (max-width: 900px) { .nd-grid { grid-template-columns: 1fr; } }
+  .nd-map { position: relative; height: 460px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .nd-map.placing { outline: 2px solid var(--accent); }
+  .nd-map.placing .leaflet-container { cursor: crosshair; }
+  .nd-form { display: grid; gap: 8px; }
+  .nd-form .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .nd-form input:not([type=checkbox]) {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 5px 8px; font: inherit; font-size: 12.5px; min-width: 0;
+  }
+  .nd-form input:focus { outline: none; border-color: var(--accent-dim); }
+  .nd-form .grow { flex: 1 1 180px; }
+  .nd-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
+  .nd-cmds .kv { font-size: 12px; }
+  .nd-cmds .st-done-ok { color: var(--ok); }
+  .nd-cmds .st-done-bad { color: var(--bad); }
+  .nd-cmds .st-queued, .nd-cmds .st-delivered { color: var(--warn); }
+  .tokenbox { background: var(--bg); border: 1px solid var(--accent-dim); border-radius: 5px;
+              padding: 8px; margin-top: 8px; }
+  .tokenbox pre { white-space: pre-wrap; word-break: break-all; margin: 6px 0; font-size: 11.5px; }
+  .warnline { color: var(--warn); }
+  .badline { color: var(--bad); }
+  .nd-table .badge { margin-right: 4px; }
+</style>
+<div class="page">
+  <h2 class="section">Nodes</h2>
+  <p class="dim" style="margin:-6px 0 12px; max-width:80ch">
+    Every receiver feeding this server: this machine&rsquo;s own XIAO, and each remote
+    site&rsquo;s XIAO forwarded by a relay on its Raspberry Pi over Tailscale. A relay
+    checks in every 10 s; the XIAO prints a status line every minute. Click a row for
+    its details, commands and raw output.
+  </p>
+  <div class="card" style="overflow-x:auto"><table class="nd-table" id="nodesTable"></table></div>
+
+  <div class="nd-grid">
+    <div>
+      <div class="card" id="detail"><div class="dim">Select a node above.</div></div>
+      <div class="card" style="margin-top:12px">
+        <h3>Add a node</h3>
+        <div class="nd-form">
+          <div class="row">
+            <input id="newName" class="grow" placeholder="name, e.g. north" aria-label="new node name"
+                   autocomplete="off" maxlength="32">
+            <button id="newAdd" class="primary">Create</button>
+          </div>
+          <div class="row">
+            <label class="dim" for="serverUrl">relays reach this server at</label>
+            <input id="serverUrl" class="grow mono" aria-label="server address for relays">
+            <button id="serverSave" title="Remember this address for install commands">Save</button>
+          </div>
+          <div class="sub dim" style="font-size:11.5px">Use this machine&rsquo;s Tailscale name
+            (<span class="mono">tailscale status</span> lists it), e.g.
+            <span class="mono">http://homepi:5001</span>. Creating a node shows its token once,
+            with the command to paste on the remote Pi.</div>
+          <span id="newMsg" class="dim"></span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="nd-map" id="mapBox"><div id="map"></div>
+        <div class="maphint" id="mapHint">Nodes with a location appear here</div></div>
+    </div>
+  </div>
+
+  <h2 class="section" style="margin-top:22px">Raw serial output</h2>
+  <div class="card" id="raw"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script src="{{ url_for('static', filename='js/rawview.js') }}"></script>
+<script src="{{ url_for('static', filename='js/nodes.js') }}"></script>
+{% endblock %}

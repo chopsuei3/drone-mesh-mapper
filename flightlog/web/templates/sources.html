@@ -13,44 +13,14 @@
   <div id="ports" class="cards"></div>
 
   {# Deliberately outside #ports: sources.js rebuilds that every 4 s, which would
-     wipe the scroll position, the pause state and the port picker. #}
-  <style>
-    .rawbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px; }
-    .rawbar select {
-      background: var(--bg); color: var(--text); border: 1px solid var(--line);
-      border-radius: 5px; padding: 4px 8px; font: inherit; font-size: 12.5px;
-    }
-    .rawview {
-      height: 340px; overflow: auto; overflow-anchor: none;
-      background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
-      padding: 6px 8px; white-space: pre-wrap; word-break: break-all; line-height: 1.5;
-    }
-    .rawview:focus { outline: none; border-color: var(--accent-dim); }
-    .rawview .rt, .rawview .rp { color: var(--dim); }
-    .rawview .rl-detection .rk { color: var(--ok); }
-    .rawview .rl-heartbeat { color: var(--dim); }
-    .rawview .rl-other .rk { color: var(--warn); }
-    .rawview .rl-sent { color: var(--accent); background: rgba(79,195,247,.08); }
-    .rawview .rl-gap { color: var(--dim); font-style: italic; }
-  </style>
+     wipe the scroll position, the pause state and the source picker. #}
   <h2 class="section" style="margin-top:22px">Raw serial output</h2>
-  <div class="card">
-    <div class="rawbar">
-      <label class="dim" for="rawPort">port</label>
-      <select id="rawPort"><option value="">all ports</option></select>
-      <button id="rawPause" aria-pressed="false">Pause</button>
-      <button id="rawClear">Clear view</button>
-      <span id="rawState" class="dim" style="font-size:11.5px"></span>
-      <span class="spacer dim mono">
-        <span style="color:var(--ok)">DET</span> detection &nbsp;
-        HB heartbeat/status &nbsp;
-        <span style="color:var(--warn)">MSG</span> other &nbsp;
-        <span style="color:var(--accent)">TX&gt;</span> sent host &rarr; device
-      </span>
-    </div>
-    <div id="rawView" class="rawview mono" role="log" aria-live="off" tabindex="0"></div>
-    <div id="rawNote" class="dim mono" style="margin-top:8px; font-size:11px"></div>
-  </div>
+  <p class="dim" style="margin:-6px 0 12px; max-width:70ch">
+    Every receiver&rsquo;s lines: this machine&rsquo;s ports as <span class="mono">home/&hellip;</span>,
+    remote relays under their node names. The <a href="/nodes" style="color:var(--accent)">Nodes</a>
+    page has the same view beside each node&rsquo;s status.
+  </p>
+  <div class="card" id="raw"></div>
 
   <style>
     .ncard input:not([type=checkbox]), .ncard select {
@@ -176,9 +146,14 @@
       Use this to feed the app while the legacy mapper holds the hardware:<br>
       <span class="mono">python mapper_test/mapper_test.py --port 5001 --duration 5</span>
     </div>
+    <div style="margin-top:8px" class="dim">
+      Remote XIAOs come in through relays instead (<span class="mono">POST /api/ingest</span>,
+      one token per node) &mdash; set them up on the <a href="/nodes" style="color:var(--accent)">Nodes</a> page.
+    </div>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/rawview.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sources.js') }}"></script>
 {% endblock %}

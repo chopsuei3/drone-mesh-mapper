@@ -147,3 +147,49 @@ td.dim, .dim { color: var(--dim); }
 .axis { display: flex; gap: 3px; color: var(--dim); font-size: 10px; margin-top: 4px; }
 .axis span { flex: 1; text-align: center; }
 h2.section { margin: 4px 0 12px; font-size: 15px; font-weight: 600; }
+
+/* ---- raw serial view (rawview.js: Sources and Nodes) ------------------- */
+.rawbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rawbar select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 5px; padding: 4px 8px; font: inherit; font-size: 12.5px;
+}
+.rawstate { font-size: 11.5px; }
+.rawview {
+  height: 340px; overflow: auto; overflow-anchor: none;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+  padding: 6px 8px; white-space: pre-wrap; word-break: break-all; line-height: 1.5;
+}
+.rawview:focus { outline: none; border-color: var(--accent-dim); }
+.rawview .rt, .rawview .rp { color: var(--dim); }
+.rawview .rl-detection .rk { color: var(--ok); }
+.rawview .rl-heartbeat { color: var(--dim); }
+.rawview .rl-other .rk { color: var(--warn); }
+.rawview .rl-sent { color: var(--accent); background: rgba(79,195,247,.08); }
+.rawview .rl-gap { color: var(--dim); font-style: italic; }
+.rawnote { margin-top: 8px; font-size: 11px; }
+
+/* ---- receiver nodes: status badges and map markers --------------------- */
+.badge.st-online       { color: var(--ok);   border-color: #1f4636; }
+.badge.st-xiao_silent  { color: var(--warn); border-color: #4a3a20; }
+.badge.st-relay_offline{ color: var(--bad);  border-color: #4a2027; }
+.badge.st-waiting,
+.badge.st-disabled     { color: var(--dim); }
+/* A diamond, so a receiver never reads as a drone's start ring or end dot. */
+.node-pin { background: none; border: 0; }
+.node-pin i {
+  display: block; width: 12px; height: 12px; margin: 3px;
+  transform: rotate(45deg); border: 2px solid #0a0e14; border-radius: 2px;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+.node-pin.st-online i        { background: var(--ok); }
+.node-pin.st-xiao_silent i   { background: var(--warn); }
+.node-pin.st-relay_offline i { background: var(--bad); }
+.node-pin.st-waiting i,
+.node-pin.st-disabled i      { background: var(--dim); }
+.node-pin.sel i { box-shadow: 0 0 0 3px var(--accent); }
+.leaflet-tooltip.node-label {
+  background: rgba(18,24,33,.92); color: var(--text); border: 1px solid var(--line);
+  box-shadow: none; font-size: 11px; padding: 1px 5px;
+}
+.leaflet-tooltip.node-label::before { display: none; }

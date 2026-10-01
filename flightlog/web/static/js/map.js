@@ -206,7 +206,79 @@
     if (line) line.setStyle({ weight: on ? 5 : 2.5 });
   };
 
+  /* ---- receiver nodes ------------------------------------------------- */
+  var NODE_STATUS = {
+    online: 'online', xiao_silent: 'XIAO silent', relay_offline: 'relay offline',
+    waiting: 'waiting for first contact', disabled: 'disabled'
+  };
+
+  function ago(ts) {
+    if (!ts) return 'never';
+    var s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 90) return Math.round(s) + ' s ago';
+    if (s < 5400) return Math.round(s / 60) + ' min ago';
+    if (s < 172800) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+
+  // Built from DOM nodes, not HTML: a relay reports its own status fields.
+  function nodePopup(n) {
+    var root = document.createElement('div');
+    var b = document.createElement('b');
+    b.textContent = n.name;
+    root.appendChild(b);
+    [[n.kind === 'local' ? 'this machine’s XIAO' : 'relay', null],
+     ['status', NODE_STATUS[n.status] || n.status],
+     ['last detection', ago(n.last_detection_at)]].forEach(function (kv) {
+      var d = document.createElement('div');
+      d.className = 'dim';
+      d.textContent = kv[1] == null ? kv[0] : kv[0] + ': ' + kv[1];
+      root.appendChild(d);
+    });
+    var a = document.createElement('a');
+    a.href = '/nodes#' + n.id;
+    a.textContent = 'node details';
+    a.style.color = 'var(--accent)';
+    root.appendChild(a);
+    return root;
+  }
+
+  /* Receivers as diamonds coloured by status, on a layer of their own so
+     clear() and setPaths() leave them alone. nodes: /api/nodes rows; those
+     without a location are skipped. opts: {selected: id, labels: bool,
+     onClick: fn(node)}. */
+  MapView.prototype.setNodes = function (nodes, opts) {
+    opts = opts || {};
+    if (!this.nodeLayer) this.nodeLayer = L.layerGroup().addTo(this.map);
+    this.nodeLayer.clearLayers();
+    var self = this;
+    (nodes || []).forEach(function (n) {
+      if (n.lat == null || n.lon == null) return;
+      var m = L.marker([n.lat, n.lon], {
+        icon: L.divIcon({
+          className: 'node-pin st-' + n.status + (opts.selected === n.id ? ' sel' : ''),
+          html: '<i></i>', iconSize: [22, 22], iconAnchor: [11, 11]
+        }),
+        keyboard: false, zIndexOffset: 500, title: n.name
+      });
+      m.bindTooltip(n.name, { permanent: !!opts.labels, direction: 'right',
+                              offset: [8, 0], className: 'node-label' });
+      if (opts.onClick) m.on('click', function () { opts.onClick(n); });
+      else m.bindPopup(nodePopup(n));
+      m.addTo(self.nodeLayer);
+    });
+  };
+
+  /* Fetch the nodes and draw them; resolves to the list. */
+  MapView.prototype.showNodes = function (opts) {
+    var self = this;
+    return fetch('/api/nodes').then(function (r) { return r.json(); })
+      .then(function (ns) { self.setNodes(ns, opts); return ns; })
+      .catch(function () { return []; });
+  };
+
   MapView.pickBasemap = pickBasemap;   // exposed for tests
+  MapView.NODE_STATUS = NODE_STATUS;
   global.MapView = MapView;
   global.colorFor = colorFor;
 })(window);
