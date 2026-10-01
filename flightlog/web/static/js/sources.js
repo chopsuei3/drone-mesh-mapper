@@ -168,13 +168,14 @@
   }
 
   function showNote(d) {
-    el('rawNote').textContent = !d.available
-      ? 'Serial ingest is off (--no-serial, or pyserial is unavailable).'
-      : d.log_path
+    el('rawNote').textContent = (d.serial === false
+      ? 'This machine reads no serial ports (--no-serial, or pyserial is unavailable); '
+        + 'lines from remote nodes still appear. ' : '')
+      + (d.log_path
         ? 'Also logged to ' + d.log_path + ' (size-capped, rotated). Follow it: tail -f "'
           + d.log_path + '"'
         : 'File log off (--no-serial-log, or the file could not be opened); only recent '
-          + 'lines are kept, in memory.';
+          + 'lines are kept, in memory.');
   }
 
   function setPorts(ports) {

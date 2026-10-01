@@ -64,6 +64,16 @@ def prune(db, days, dry_run=False):
         if n < CHUNK:
             break
         time.sleep(0.05)          # let ingest through between chunks
+    # The per-node coverage samples behind the same flights go too; like the
+    # detections they are raw points, and flight_nodes keeps the summary.
+    while True:
+        cur = db.execute(
+            "DELETE FROM node_samples WHERE rowid IN ("
+            "  SELECT s.rowid FROM node_samples s JOIN flights f ON f.id = s.flight_id"
+            "   WHERE f.ended_at IS NOT NULL AND f.ended_at < ? LIMIT ?)", (cutoff, CHUNK))
+        if (cur.rowcount or 0) < CHUNK:
+            break
+        time.sleep(0.05)
     if deleted:
         try:
             db.execute('PRAGMA incremental_vacuum(1000)')

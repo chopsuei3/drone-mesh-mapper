@@ -5,6 +5,9 @@ Runs on 5001 by default so it can sit alongside the legacy mesh-mapper.py on
 reader per port is a physical constraint, not a convention (see the comment at
 mesh-mapper.py:13070). Feed this one over POST /api/detections while the old one
 holds the hardware, or vice versa.
+
+Remote XIAOs reach it through relays (relay.py) posting to /api/ingest; see
+nodes.py.
 """
 import argparse
 import json
@@ -12,6 +15,7 @@ import logging
 import os
 import re
 import time
+import zlib
 
 from flask import (Flask, jsonify, request, render_template, Response,
                    send_from_directory)
@@ -23,7 +27,10 @@ from .identity import IdentityResolver
 from .flights import Sessionizer, DEFAULT_GAP_S, DEFAULT_RESUME_S
 from .parse import normalize
 from .export import flights_csv, flights_kml, flights_gpx
+from .ingest.reader import RawLog, RAW_LOG_NAME, short_port, classify_line as _classify
 from .ingest.serial_source import SerialManager, list_ports
+from .nodes import (NodeRegistry, BatchIngest, MAX_BODY_BYTES, MAX_INFLATED_BYTES,
+                    RELAY_KIND)
 from . import edit
 from .services import tiles as tiles_svc
 from .services.geofence import GeofenceEngine
@@ -37,12 +44,31 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# How late a relayed detection may arrive and still count as live. A node
+# delivering its backlog after an outage must place those flights in history
+# without announcing them: past this, nothing reaches the live map...
+LIVE_MAX_AGE_S = 60.0
+# ...and past this, nothing alerts - no takeoff alert, no geofence crossing.
+ALERT_MAX_AGE_S = 120.0
+
+
+def _inflate(data, limit):
+    """gunzip with a ceiling, so a small hostile body cannot expand without bound."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(data, limit + 1)
+    if len(out) > limit or d.unconsumed_tail:
+        raise OverflowError
+    return out
+
 
 def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True,
                retention_days=0, resume_s=DEFAULT_RESUME_S, serial_log=True):
     app = Flask(__name__,
                 template_folder=os.path.join(os.path.dirname(__file__), 'web', 'templates'),
                 static_folder=os.path.join(os.path.dirname(__file__), 'web', 'static'))
+    # Nothing posted here is large; a relay batch is capped at MAX_BODY_BYTES
+    # by its own route. This bounds a body sent without a Content-Length.
+    app.config['MAX_CONTENT_LENGTH'] = 4 * MAX_BODY_BYTES
 
     db = Database(db_path)
     identity = IdentityResolver(db)
@@ -100,31 +126,38 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
 
     app.config['FORGET_DRONE'] = _forget_drone
 
-    def _on_takeoff(payload):
+    def _on_takeoff(payload, alert=True):
         """A new flight - not one resuming after a dropout. Queues the FAA lookup
         and the alert; both are queue pushes, and the slow work runs on their
-        own threads, so this costs the ingest path next to nothing."""
+        own threads, so this costs the ingest path next to nothing. A flight
+        from a node's backlog is looked up but never alerted."""
         try:
             if settings.get('faa.auto'):
                 faa.request(payload['drone_id'])
-            notifier.flight_opened(payload)
+            if alert:
+                notifier.flight_opened(payload)
         except Exception as e:
             logger.warning('takeoff hooks failed: %s', e)
 
     def _on_flight_event(name, payload):
+        # How late the detection reached us: only relayed ones carry it.
+        delay = payload.get('delay') or 0.0
+        past = payload.get('past')
         if name != 'flight:point':
             if name == 'flight:open' and not payload.get('resumed'):
-                _on_takeoff(payload)
+                _on_takeoff(payload, alert=not past and delay <= ALERT_MAX_AGE_S)
+                if past or delay > LIVE_MAX_AGE_S:
+                    return                  # history, not news: keep it off the live map
             if name == 'flight:close':
                 _drone_meta.pop(payload.get('drone_id'), None)
             if bus is not None:
                 bus.publish(name, payload)
             return
         lat, lon = payload.get('lat'), payload.get('lon')
-        if lat is None or lon is None:
+        if lat is None or lon is None or past or delay > ALERT_MAX_AGE_S:
             return
         label, tag = _meta(payload['drone_id'])
-        if bus is not None:
+        if bus is not None and delay <= LIVE_MAX_AGE_S:
             # Coalesced: only the newest position per flight survives each tick,
             # so 50 detections/s still produce 4 messages/s.
             bus.publish_position(dict(payload, label=label, tag=tag))
@@ -140,12 +173,33 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
 
     sess.on_event = _on_flight_event
 
+    # Raw lines from every receiver - this machine's ports and every relay's -
+    # for the raw views, and the size-capped file beside the database.
+    log_path = None
+    if live and serial_log and db.path != ':memory:':
+        log_path = os.path.join(os.path.dirname(db.path), RAW_LOG_NAME)
+    rawlog = RawLog(log_path)
+    if rawlog.path:
+        print("serial: raw output logged to " + rawlog.path)
+    app.config['RAWLOG'] = rawlog
+
+    nodes = NodeRegistry(db, settings)
+    app.config['NODES'] = nodes
+    home_id = nodes.ensure_local()
+    batch_ingest = BatchIngest(nodes, sess, rawlog)
+    if live:
+        nodes.start()
+
     serial_mgr = None
     if serial_enabled:
         try:
-            serial_mgr = SerialManager(sess, raw_log=serial_log)
-            if serial_mgr.raw_log_path:
-                print("serial: raw output logged to " + serial_mgr.raw_log_path)
+            serial_mgr = SerialManager(
+                sess, rawlog=rawlog,
+                source_for=lambda port: '%s/%s' % (nodes.name(home_id), short_port(port)),
+                on_line=lambda port, line, ts, det: nodes.line_seen(
+                    home_id, port, ts, line, 'detection' if det is not None
+                    else _classify(line)))
+            serial_mgr.rx_node = home_id
             started = serial_mgr.autostart()
             if started:
                 print("serial: reconnected to " + ", ".join(started))
@@ -153,6 +207,10 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
             print("serial ingest unavailable: {0}".format(e))
             serial_mgr = None
     app.config['SERIAL'] = serial_mgr
+    if serial_mgr is not None:
+        nodes.local_send = serial_mgr.send
+        nodes.local_ports = lambda: {p: {'connected': bool(serial_mgr.status.get(p))}
+                                     for p in serial_mgr.selected}
 
     # Vendored libraries (leaflet, maplibre, socket.io, fonts) already live in
     # the repo's own static/ dir; serve them from there rather than duplicating.
@@ -215,6 +273,111 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
             return jsonify({'status': 'ignored'}), 200
         fid = sess.ingest(det)
         return jsonify({'status': 'ok', 'flight_id': fid}), 200
+
+    # -- relay ingest -----------------------------------------------------------
+    def _relay_node():
+        """(node, None) for a valid bearer token, else (None, error response)."""
+        auth = request.headers.get('Authorization') or ''
+        token = auth[7:].strip() if auth[:7].lower() == 'bearer ' else None
+        node = nodes.authenticate(token)
+        if node is None:
+            return None, (jsonify({'error': 'unknown or revoked token'}), 401)
+        if not node['enabled']:
+            return None, (jsonify({'error': 'node %s is disabled' % node['name']}), 403)
+        return node, None
+
+    @app.route('/api/ingest', methods=['POST'])
+    def api_ingest():
+        """One batch from a relay. See relay.py for the sender, nodes.py for
+        what happens to each line. Lines at or below the node's acknowledged
+        sequence number are skipped, so a resent batch stores nothing twice."""
+        node, err = _relay_node()
+        if err:
+            return err
+        if (request.content_length or 0) > MAX_BODY_BYTES:
+            return jsonify({'error': 'batch over %d bytes' % MAX_BODY_BYTES}), 413
+        data = request.get_data(cache=False)
+        if len(data) > MAX_BODY_BYTES:
+            return jsonify({'error': 'batch over %d bytes' % MAX_BODY_BYTES}), 413
+        if (request.headers.get('Content-Encoding') or '').lower() == 'gzip':
+            try:
+                data = _inflate(data, MAX_INFLATED_BYTES)
+            except OverflowError:
+                return jsonify({'error': 'batch inflates past %d bytes' % MAX_INFLATED_BYTES}), 413
+            except zlib.error:
+                return jsonify({'error': 'body is not valid gzip'}), 400
+        try:
+            body = json.loads(data.decode('utf-8'))
+            BatchIngest.validate(body)
+        except (ValueError, UnicodeDecodeError) as e:
+            return jsonify({'error': 'malformed batch: %s' % e}), 400
+        return jsonify(batch_ingest.handle(node, body, time.time()))
+
+    @app.route('/api/ingest/hello')
+    def api_ingest_hello():
+        """Lets the relay installer check its server address and token."""
+        node, err = _relay_node()
+        if err:
+            return err
+        return jsonify({'node': node['name'], 'id': node['id'], 'server_time': time.time(),
+                        'spool_id': node['spool_id'], 'ack_seq': node['ack_seq']})
+
+    # -- nodes --------------------------------------------------------------------
+    def _install_command(name, token):
+        base = settings.get('nodes.server_url') or request.host_url.rstrip('/')
+        return ('python3 RPI/install_relay.py --server %s --token %s --name %s'
+                % (base, token, name))
+
+    @app.route('/api/nodes')
+    def api_nodes():
+        return jsonify(nodes.list())
+
+    @app.route('/api/nodes', methods=['POST'])
+    def api_node_create():
+        try:
+            node, token = nodes.create(request.get_json(silent=True))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        return jsonify({'node': node, 'token': token,
+                        'install': _install_command(node['name'], token)}), 201
+
+    @app.route('/api/nodes/<int:nid>', methods=['GET', 'PATCH', 'DELETE'])
+    def api_node(nid):
+        if nodes.get(nid) is None:
+            return jsonify({'error': 'not found'}), 404
+        if request.method == 'GET':
+            return jsonify(nodes.get(nid))
+        if request.method == 'DELETE':
+            if not nodes.delete(nid):
+                return jsonify({'error': 'the local node cannot be deleted'}), 400
+            return jsonify({'status': 'deleted'})
+        try:
+            return jsonify(nodes.update(nid, request.get_json(silent=True)))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+    @app.route('/api/nodes/<int:nid>/token', methods=['POST'])
+    def api_node_token(nid):
+        node = nodes.get(nid)
+        if node is None:
+            return jsonify({'error': 'not found'}), 404
+        token = nodes.rotate(nid)
+        if token is None:
+            return jsonify({'error': 'only relay nodes have tokens'}), 400
+        return jsonify({'node': nodes.get(nid), 'token': token,
+                        'install': _install_command(node['name'], token)})
+
+    @app.route('/api/nodes/<int:nid>/commands', methods=['GET', 'POST'])
+    def api_node_commands(nid):
+        if nodes.get(nid) is None:
+            return jsonify({'error': 'not found'}), 404
+        if request.method == 'GET':
+            return jsonify(nodes.commands(nid, request.args.get('limit', 20)))
+        body = request.get_json(silent=True) or {}
+        try:
+            return jsonify(nodes.queue_command(nid, body.get('port'), body.get('command'))), 201
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
 
     # -- realtime ------------------------------------------------------------
     @app.route('/api/stream')
@@ -391,15 +554,17 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
 
     @app.route('/api/ports/raw')
     def api_ports_raw():
-        """Recent raw serial lines, oldest first, for the Sources page.
+        """Recent raw serial lines, oldest first, from every receiver.
 
-        ?port= narrows to one device (default: all), ?limit= caps the count
-        (default 200, max 500 - the per-port buffer size), and ?since=<seq>&boot=
-        returns only lines after that sequence number, so the page polls with the
-        `seq` of the last line it has plus the `boot` it came with. Sequence
-        numbers restart with the process: a `boot` that no longer matches means
-        the server restarted, so the stale cursor is dropped, the recent window
-        is sent instead, and `reset` is set so the page can mark the seam.
+        ?port= narrows to one source - `home/ttyACM0`, `north/ttyACM0` - (default:
+        all), ?limit= caps the count (default 200, max 500 - the per-source
+        buffer size), and ?since=<seq>&boot= returns only lines after that
+        sequence number, so the page polls with the `seq` of the last line it
+        has plus the `boot` it came with. Sequence numbers restart with the
+        process: a `boot` that no longer matches means the server restarted, so
+        the stale cursor is dropped, the recent window is sent instead, and
+        `reset` is set so the page can mark the seam. `serial` says whether
+        this machine reads ports itself; remote nodes' lines arrive either way.
         """
         port = request.args.get('port') or None
         try:
@@ -413,16 +578,14 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
                 since = None
         except (KeyError, TypeError, ValueError):
             since = None
-        if serial_mgr is None:
-            out = {'lines': [], 'more': False, 'ports': [], 'log_path': None,
-                   'seq': 0, 'boot': None, 'reset': False, 'log_dropped': 0}
-        else:
-            boot = request.args.get('boot')
-            reset = bool(boot) and boot != serial_mgr.raw_boot
+        boot = request.args.get('boot')
+        reset = bool(boot) and boot != rawlog.boot
+        if serial_mgr is not None:
             out = serial_mgr.raw_lines(port=port, since=None if reset else since, limit=limit)
-            out.update(log_path=serial_mgr.raw_log_path, reset=reset,
-                       log_dropped=serial_mgr.raw_log_dropped)
-        out.update(available=serial_mgr is not None, now=time.time())
+        else:
+            out = rawlog.lines(source=port, since=None if reset else since, limit=limit)
+        out.update(log_path=rawlog.path, reset=reset, log_dropped=rawlog.dropped,
+                   available=True, serial=serial_mgr is not None, now=time.time())
         return jsonify(out)
 
     # -- flights -------------------------------------------------------------
@@ -476,7 +639,10 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
     def api_live():
         """Snapshot of everything currently airborne. Small and bounded."""
         out = []
+        now = time.time()
         for st in list(sess.open_flights.values()):
+            if st.delayed and now - st.last_ts > sess.gap_s:
+                continue        # a backlog flight, kept open only while it is delivered
             row = queries.get_flight(db, st.flight_id) or {}
             row.update({
                 'lat': st.end_lat, 'lon': st.end_lon,

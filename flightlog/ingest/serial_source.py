@@ -48,6 +48,7 @@ class SerialManager:
         self.selected = self._load()
         self.source_for = source_for or (lambda port: port)
         self._hook = on_line
+        self.rx_node = None             # the node these ports belong to (nodes.id), if any
 
         self._owns_raw = rawlog is None
         if rawlog is None:
@@ -151,6 +152,8 @@ class SerialManager:
         det = parser.feed(line)
         try:
             if det is not None:
+                if self.rx_node is not None:
+                    det['rx_node'] = self.rx_node
                 self.sess.ingest(det)
                 self.counts[port] = self.counts.get(port, 0) + 1
                 self.last_detection[port] = time.time()

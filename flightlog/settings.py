@@ -13,6 +13,10 @@ DEFAULTS = {
     'notify.enabled': True,        # master switch; nothing sends until a channel exists
     'notify.base_url': '',         # e.g. http://raspberrypi.local:5001, for links in alerts
     'notify.settle_s': 15.0,       # wait up to this long for a GPS fix before alerting
+    # A relay with no contact, or a XIAO with no line, for this long is offline.
+    # The XIAO prints a status line every 60 s and a relay checks in every 10 s.
+    'nodes.offline_after_s': 600.0,
+    'nodes.server_url': '',        # how relays reach this server, e.g. http://homepi:5001
 }
 
 _URL = re.compile(r'https?://[^\s/]+(:\d+)?(/\S*)?')
@@ -37,11 +41,19 @@ def _settle(key, v):
     return float(v)
 
 
+def _offline_after(key, v):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 60 <= v <= 86400:
+        raise ValueError('%s must be a number of seconds from 60 to 86400' % key)
+    return float(v)
+
+
 VALIDATORS = {
     'faa.auto': _bool,
     'notify.enabled': _bool,
     'notify.base_url': _base_url,
     'notify.settle_s': _settle,
+    'nodes.offline_after_s': _offline_after,
+    'nodes.server_url': _base_url,
 }
 
 

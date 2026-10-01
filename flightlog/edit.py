@@ -128,10 +128,38 @@ def merge_flights(db, ids):
     om = ','.join('?' * len(others))
     db.execute("UPDATE detections SET flight_id=? WHERE flight_id IN ({0})".format(om),
                [keep] + others)
+    db.execute("UPDATE node_samples SET flight_id=? WHERE flight_id IN ({0})".format(om),
+               [keep] + others)
+    _merge_flight_nodes(db, keep, others)
     db.execute("DELETE FROM flights WHERE id IN ({0})".format(om), others)
     recompute(db, keep)
     db.execute("UPDATE flights SET close_reason='merged' WHERE id=?", (keep,))
     return {'merged_into': keep, 'removed': others}
+
+
+def _merge_flight_nodes(db, keep, others):
+    """Sum who-heard-it rows into the kept flight. They cannot be rebuilt from
+    detections: a reading another node already delivered is stored only here."""
+    ids = [keep] + list(others)
+    marks = ','.join('?' * len(ids))
+    rows = db.query(
+        "SELECT node_id, SUM(receptions) AS n, MAX(max_rssi) AS hi, MIN(min_rssi) AS lo,"
+        " MIN(first_ts) AS first, MAX(last_ts) AS last FROM flight_nodes"
+        " WHERE flight_id IN ({0}) GROUP BY node_id".format(marks), ids)
+    with db.write_lock():
+        conn = db.conn
+        conn.execute('BEGIN')
+        try:
+            conn.execute("DELETE FROM flight_nodes WHERE flight_id IN ({0})".format(marks), ids)
+            conn.executemany(
+                "INSERT INTO flight_nodes(flight_id, node_id, receptions, max_rssi, min_rssi,"
+                " first_ts, last_ts) VALUES(?,?,?,?,?,?,?)",
+                [(keep, r['node_id'], r['n'], r['hi'], r['lo'], r['first'], r['last'])
+                 for r in rows])
+            conn.execute('COMMIT')
+        except Exception:
+            conn.execute('ROLLBACK')
+            raise
 
 
 def reassign_flight(db, flight_id, drone_id):

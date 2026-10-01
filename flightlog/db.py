@@ -83,6 +83,64 @@ CREATE TABLE IF NOT EXISTS detections (
   heading_deg REAL,
   suspect INTEGER NOT NULL DEFAULT 0);
 
+-- Receivers: the home Pi's own XIAO ('local') and remote relays ('relay').
+-- Runtime fields (last_*_at, *_status, ack_seq) are kept in memory by nodes.py
+-- and written back every few seconds; tokens are stored only as sha256 hashes.
+CREATE TABLE IF NOT EXISTS nodes (
+  id                INTEGER PRIMARY KEY,
+  name              TEXT UNIQUE NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'relay',
+  token_hash        TEXT,
+  token_hint        TEXT,
+  enabled           INTEGER NOT NULL DEFAULT 1,
+  lat REAL, lon REAL,
+  notes             TEXT,
+  created_at        REAL,
+  last_contact_at   REAL,
+  last_line_at      REAL,
+  last_detection_at REAL,
+  xiao_status       TEXT,
+  relay_status      TEXT,
+  clock_offset_s    REAL,
+  spool_id          TEXT,
+  ack_seq           INTEGER NOT NULL DEFAULT 0,
+  alert_state       TEXT);
+
+CREATE TABLE IF NOT EXISTS node_commands (
+  id           INTEGER PRIMARY KEY,
+  node_id      INTEGER NOT NULL,
+  port         TEXT,
+  command      TEXT NOT NULL,
+  created_at   REAL NOT NULL,
+  delivered_at REAL,
+  done_at      REAL,
+  ok           INTEGER,
+  result       TEXT);
+
+-- Who heard each flight. Upserted incrementally by the batched writer; a
+-- reception another node already delivered lands here and nowhere else.
+-- No foreign keys: a node or flight deleted while rows are still waiting in
+-- the writer must not make the whole batch (detections included) fail.
+CREATE TABLE IF NOT EXISTS flight_nodes (
+  flight_id  INTEGER NOT NULL,
+  node_id    INTEGER NOT NULL,
+  receptions INTEGER NOT NULL DEFAULT 0,
+  max_rssi   INTEGER,
+  min_rssi   INTEGER,
+  first_ts   REAL,
+  last_ts    REAL,
+  PRIMARY KEY (flight_id, node_id));
+
+-- A thinned sample of the positions each node heard, duplicates included, for
+-- range and coverage. Duplicates are not stored as detections, so without this
+-- a node that mostly hears what another already delivered would look blind.
+CREATE TABLE IF NOT EXISTS node_samples (
+  node_id   INTEGER NOT NULL,
+  flight_id INTEGER NOT NULL,
+  ts        REAL NOT NULL,
+  lat REAL, lon REAL, alt REAL,
+  rssi INTEGER);
+
 CREATE INDEX IF NOT EXISTS ix_flights_started ON flights(started_at DESC);
 CREATE INDEX IF NOT EXISTS ix_flights_drone   ON flights(drone_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS ix_flights_open    ON flights(ended_at) WHERE ended_at IS NULL;
@@ -90,6 +148,10 @@ CREATE INDEX IF NOT EXISTS ix_flights_bbox    ON flights(bbox_s, bbox_n, bbox_w,
 CREATE INDEX IF NOT EXISTS ix_det_flight      ON detections(flight_id, ts);
 CREATE INDEX IF NOT EXISTS ix_det_ts          ON detections(ts);
 CREATE INDEX IF NOT EXISTS ix_macs_drone      ON drone_macs(drone_id);
+CREATE INDEX IF NOT EXISTS ix_fn_node         ON flight_nodes(node_id);
+CREATE INDEX IF NOT EXISTS ix_ns_node         ON node_samples(node_id, ts);
+CREATE INDEX IF NOT EXISTS ix_ns_flight       ON node_samples(flight_id);
+CREATE INDEX IF NOT EXISTS ix_cmd_node        ON node_commands(node_id, id);
 
 -- Guards the migration's idempotency: the same (mac, ts) can only land once.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_det_import ON detections(flight_id, ts, lat, lon);
@@ -111,6 +173,9 @@ ADDED_COLUMNS = (
     # 'DJI' for a drone heard through DJI's proprietary Wi-Fi DroneID; NULL for
     # ASTM Remote ID. Decides "home point" vs "pilot" labels and the FAA skip.
     ('drones', 'id_type', 'TEXT'),
+    # The receiver (nodes.id) that heard each stored point; NULL for HTTP posts
+    # and for everything recorded before nodes existed.
+    ('detections', 'rx_node', 'INTEGER'),
 )
 
 
