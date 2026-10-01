@@ -42,7 +42,19 @@
   }
   function esc(s) {
     return String(s === null || s === undefined ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  // Who heard it, best signal first. Empty for HTTP posts and imported history.
+  function heardText(h) {
+    return h.name + ': ' + h.receptions + ' reception' + (h.receptions === 1 ? '' : 's')
+      + (h.max_rssi !== null && h.max_rssi !== undefined ? ', best ' + h.max_rssi + ' dBm' : '');
+  }
+  function nodesCell(f) {
+    var hb = f.heard_by || [];
+    if (!hb.length) return '<span class="dim">-</span>';
+    return hb.map(function (h) {
+      return '<span class="badge" title="' + esc(heardText(h)) + '">' + esc(h.name) + '</span>';
+    }).join(' ');
   }
 
   /* ---- query ----------------------------------------------------------- */
@@ -53,6 +65,7 @@
     var q = el('q').value.trim(); if (q) p.set('q', q);
     var tag = el('tag').value; if (tag) p.set('tag', tag);
     var grp = el('group').value; if (grp) p.set('group_id', grp);
+    var node = el('node').value; if (node) p.set('rx_node', node);
     var tr = el('track').value; if (tr !== '') p.set('has_track', tr);
     var f = el('from').value, t = el('to').value;
     if (f) p.set('from', new Date(f + 'T00:00:00').getTime() / 1000);
@@ -94,6 +107,7 @@
             + f.suspect_count + ' implausible fixes excluded">' + f.suspect_count + '!</span>' : '')
         + '</td>'
         + '<td class="dim">' + esc(f.group_name || '-') + '</td>'
+        + '<td>' + nodesCell(f) + '</td>'
         + '<td class="num">' + fmtDur(f.duration_s) + '</td>'
         + '<td class="num">' + fmtDist(f.distance_m) + '</td>'
         + '<td class="num">' + (f.max_alt_m !== null ? Math.round(f.max_alt_m) + ' m' : '<span class="dim">-</span>') + '</td>'
@@ -144,7 +158,9 @@
         Object.keys(paths).forEach(function (id) {
           var f = state.meta[id] || {};
           meta[id] = { popup: '<b>' + esc(f.drone_label || f.basic_id || f.mac || id) + '</b><br>'
-            + fmtTime(f.started_at) + '<br>' + fmtDist(f.distance_m) + ' · ' + fmtDur(f.duration_s) };
+            + fmtTime(f.started_at) + '<br>' + fmtDist(f.distance_m) + ' · ' + fmtDur(f.duration_s)
+            + ((f.heard_by || []).length ? '<br><span class="dim">heard by</span> '
+               + f.heard_by.map(function (h) { return esc(heardText(h)); }).join('<br>') : '') };
         });
         mv.setPaths(paths, meta);
         el('mapHint').style.display = Object.keys(paths).length ? 'none' : 'block';
@@ -279,13 +295,13 @@
 
   var t = null;
   function reload() { state.offset = 0; clearTimeout(t); t = setTimeout(load, 220); }
-  ['q', 'from', 'to', 'tag', 'group', 'track'].forEach(function (id) {
+  ['q', 'from', 'to', 'tag', 'group', 'track', 'node'].forEach(function (id) {
     el(id).addEventListener('input', reload);
     el(id).addEventListener('change', reload);
   });
   el('reset').addEventListener('click', function () {
     ['q', 'from', 'to'].forEach(function (id) { el(id).value = ''; });
-    ['tag', 'group', 'track'].forEach(function (id) { el(id).value = ''; });
+    ['tag', 'group', 'track', 'node'].forEach(function (id) { el(id).value = ''; });
     reload();
   });
 
@@ -302,6 +318,16 @@
     gs.forEach(function (g) {
       var o = document.createElement('option');
       o.value = g.id; o.textContent = g.name + ' (' + g.drone_count + ')';
+      sel.appendChild(o);
+    });
+  });
+
+  // Receivers: the filter's choices, and diamonds on the map.
+  mv.showNodes().then(function (ns) {
+    var sel = el('node');
+    ns.forEach(function (n) {
+      var o = document.createElement('option');
+      o.value = n.id; o.textContent = 'heard by ' + n.name;
       sel.appendChild(o);
     });
   });

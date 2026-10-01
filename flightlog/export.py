@@ -21,6 +21,7 @@ SUMMARY_COLUMNS = [
     'max_alt_m_msl', 'min_alt_m_msl', 'max_speed_ms',
     'pilot_lat', 'pilot_lon', 'det_count', 'gps_count', 'suspect_count',
     'max_rssi', 'min_rssi', 'close_reason',
+    'heard_by',            # receivers, "north:412;home:380" (name:receptions), best signal first
 ]
 
 
@@ -83,6 +84,7 @@ def flights_csv(db, params):
             f['max_rssi'] if f['max_rssi'] is not None else '',
             f['min_rssi'] if f['min_rssi'] is not None else '',
             f['close_reason'] or '',
+            ';'.join('%s:%d' % (h['name'], h['receptions']) for h in f.get('heard_by') or []),
         ])
         yield drain()
 

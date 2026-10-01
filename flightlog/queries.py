@@ -56,6 +56,11 @@ def _filters(p):
         where.append("d.group_id = ?"); args.append(int(p['group_id']))
     if p.get('tag'):
         where.append("d.tag = ?"); args.append(p['tag'])
+    if p.get('rx_node'):
+        # Heard by this receiver - copies of another node's readings included,
+        # which only flight_nodes records.
+        where.append("f.id IN (SELECT flight_id FROM flight_nodes WHERE node_id = ?)")
+        args.append(int(p['rx_node']))
     if p.get('status') == 'open':
         where.append("f.ended_at IS NULL")
     elif p.get('status') == 'closed':
@@ -114,8 +119,30 @@ def list_flights(db, p):
         "SELECT" + FLIGHT_COLUMNS + FROM_JOIN + where +
         " ORDER BY {0} {1}, f.id {1} LIMIT ? OFFSET ?".format(sort, order),
         args + [limit, offset])
-    return {'total': total, 'limit': limit, 'offset': offset,
-            'rows': [flight_row(r) for r in rows]}
+    out = [flight_row(r) for r in rows]
+    heard = heard_by(db, [f['id'] for f in out])
+    for f in out:
+        f['heard_by'] = heard.get(f['id'], [])
+    return {'total': total, 'limit': limit, 'offset': offset, 'rows': out}
+
+
+def heard_by(db, flight_ids):
+    """flight id -> the receivers that heard it, best signal first."""
+    out = {}
+    ids = list(flight_ids)
+    for i in range(0, len(ids), 400):
+        chunk = ids[i:i + 400]
+        rows = db.query(
+            "SELECT fn.flight_id, fn.node_id, n.name, fn.receptions, fn.max_rssi, fn.first_ts,"
+            " fn.last_ts FROM flight_nodes fn JOIN nodes n ON n.id = fn.node_id"
+            " WHERE fn.flight_id IN ({0})"
+            " ORDER BY fn.flight_id, COALESCE(fn.max_rssi, -999) DESC, n.name".format(
+                ','.join('?' * len(chunk))), chunk)
+        for r in rows:
+            out.setdefault(r['flight_id'], []).append({
+                'id': r['node_id'], 'name': r['name'], 'receptions': r['receptions'],
+                'max_rssi': r['max_rssi'], 'first_ts': r['first_ts'], 'last_ts': r['last_ts']})
+    return out
 
 
 def flight_row(r):
@@ -170,6 +197,7 @@ def get_flight(db, flight_id):
         "SELECT mac, first_seen, last_seen FROM drone_macs WHERE drone_id = ? ORDER BY last_seen",
         (out['drone_id'],))
     out['drone_macs'] = [dict(m) for m in macs]
+    out['heard_by'] = heard_by(db, [flight_id]).get(flight_id, [])
     return out
 
 

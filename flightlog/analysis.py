@@ -12,6 +12,7 @@ import math
 from collections import defaultdict
 
 from .colors import display_color
+from .geo import haversine_m
 from .queries import FROM_JOIN, _filters
 
 DUR = "(COALESCE(f.ended_at, f.started_at) - f.started_at)"
@@ -27,6 +28,7 @@ POPUP_DRONES = 8
 MIN_CELL_DEG, MAX_CELL_DEG = 0.0001, 0.5
 MERGE_CELLS = 0.8          # cells closer than this (in cell widths) become one circle
 ID_CHUNK = 400             # keeps IN (...) lists well under SQLite's variable limit
+RANGE_SAMPLES = 20000      # newest coverage samples per node that a range is measured over
 
 
 def _where(p, extra=None):
@@ -282,6 +284,53 @@ def _merge_close(cells_, c):
             else:
                 target['drones'][did] = dict(d)
     return kept
+
+
+# -- receivers -----------------------------------------------------------------------
+def _pct(sorted_vals, q):
+    """Nearest-rank percentile of an ascending list."""
+    if not sorted_vals:
+        return None
+    k = max(0, min(len(sorted_vals) - 1, int(math.ceil(q * len(sorted_vals))) - 1))
+    return sorted_vals[k]
+
+
+def nodes(db, p):
+    """Per receiver, over the filtered flights: what it heard, and from how far.
+
+    Counts come from flight_nodes, so a reading another node delivered first
+    still counts for every node that heard it. Range is the distance from the
+    node's location to the drone positions it heard (node_samples, which keep
+    those copies too), over the newest RANGE_SAMPLES per node - typical (p50),
+    far (p95) and farthest. A node without a location has no range.
+    """
+    where, args = _where(p)
+    stats = {r['node_id']: dict(r) for r in db.query(
+        "SELECT fn.node_id, COUNT(DISTINCT fn.flight_id) AS flights,"
+        " COUNT(DISTINCT f.drone_id) AS drones, SUM(fn.receptions) AS receptions,"
+        " MAX(fn.max_rssi) AS max_rssi, MAX(fn.last_ts) AS last_heard"
+        " FROM flight_nodes fn JOIN flights f ON f.id = fn.flight_id"
+        " JOIN drones d ON d.id = f.drone_id LEFT JOIN groups g ON g.id = d.group_id"
+        + where + " GROUP BY fn.node_id", args)}
+    out = []
+    for n in db.query("SELECT id, name, kind, lat, lon FROM nodes ORDER BY kind <> 'local', name"):
+        s = stats.get(n['id'], {})
+        row = {'id': n['id'], 'name': n['name'], 'kind': n['kind'], 'lat': n['lat'], 'lon': n['lon'],
+               'flights': s.get('flights', 0), 'drones': s.get('drones', 0),
+               'receptions': s.get('receptions', 0), 'max_rssi': s.get('max_rssi'),
+               'last_heard': s.get('last_heard'), 'range': None}
+        if n['lat'] is not None and row['flights']:
+            w, a = _where(p, 's.node_id = ?')
+            pts = db.query(
+                "SELECT s.lat, s.lon FROM node_samples s JOIN flights f ON f.id = s.flight_id"
+                " JOIN drones d ON d.id = f.drone_id LEFT JOIN groups g ON g.id = d.group_id"
+                + w + " ORDER BY s.ts DESC LIMIT ?", a + [n['id'], RANGE_SAMPLES])
+            dists = sorted(haversine_m(n['lat'], n['lon'], r['lat'], r['lon']) for r in pts)
+            if dists:
+                row['range'] = {'samples': len(dists), 'p50_m': _pct(dists, 0.5),
+                                'p95_m': _pct(dists, 0.95), 'max_m': dists[-1]}
+        out.append(row)
+    return {'nodes': out, 'max_samples': RANGE_SAMPLES}
 
 
 # -- radio -------------------------------------------------------------------------

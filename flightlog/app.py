@@ -754,6 +754,17 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
         except ValueError as e:
             return jsonify({'error': 'bad filter: %s' % e}), 400
 
+    @app.route('/api/analysis/nodes')
+    def api_analysis_nodes():
+        try:
+            out = analysis.nodes(db, request.args)
+        except ValueError as e:
+            return jsonify({'error': 'bad filter: %s' % e}), 400
+        for n in out['nodes']:
+            live = nodes.get(n['id'])
+            n['status'] = live['status'] if live else None
+        return jsonify(out)
+
     @app.route('/api/analysis/radio')
     def api_analysis_radio():
         try:

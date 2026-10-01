@@ -7,6 +7,7 @@
 (function () {
   'use strict';
   var id = window.DRONE_ID, mv = new MapView('map');
+  mv.showNodes();
 
   function esc(s) {
     return String(s === null || s === undefined ? '' : s)
@@ -74,6 +75,17 @@
     return html;
   }
 
+  // Every receiver that has heard this airframe: on how many flights, how well.
+  function heardCard(d) {
+    var rows = (d.heard_by || []).map(function (h) {
+      return '<div class="kv"><span>' + esc(h.name) + '</span><span>' + h.flights + ' flight'
+        + (h.flights === 1 ? '' : 's') + ' · ' + h.receptions + ' receptions'
+        + (h.max_rssi !== null ? ' · best ' + h.max_rssi + ' dBm' : '') + '</span></div>';
+    }).join('');
+    return '<div class="card"><h3>Heard by</h3>' + (rows || '<div class="dim">No receiver recorded'
+      + ' (HTTP posts and imported history carry none).</div>') + '</div>';
+  }
+
   function loadSummary(lookupNote) {
     return fetch('/api/drones/' + id + '/summary')
       .then(function (r) { return r.json(); })
@@ -99,6 +111,7 @@
           + (d.max_alt_m !== null ? Math.round(d.max_alt_m) + ' m MSL' : '-') + '</span></div>'
           + '<div class="kv"><span>detections</span><span>' + d.detections + '</span></div></div>'
           + '<div class="card"><h3>MACs used (' + (d.macs || []).length + ')</h3>' + macs + note + '</div>'
+          + heardCard(d)
           + identCard(d, lookupNote);
       });
   }
@@ -123,6 +136,9 @@
           + '<td class="num">' + Math.round(f.distance_m) + ' m</td>'
           + '<td class="num">' + (f.max_alt_m !== null ? Math.round(f.max_alt_m) + ' m' : '-') + '</td>'
           + '<td class="num">' + f.det_count + '</td>'
+          + '<td>' + ((f.heard_by || []).map(function (h) {
+              return esc(h.name) + (h.max_rssi !== null ? ' <span class="dim">' + h.max_rssi + '</span>' : '');
+            }).join(', ') || '<span class="dim">-</span>') + '</td>'
           + '<td class="mono dim">' + esc(f.mac) + '</td></tr>';
       }).join('');
       var ids = d.rows.map(function (f) { return f.id; });

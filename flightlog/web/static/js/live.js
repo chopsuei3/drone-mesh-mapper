@@ -11,6 +11,9 @@
 
   var mv = new MapView('map');
   var hint = document.getElementById('mapHint');
+  // Receivers, coloured by status; refreshed now and then, not streamed.
+  mv.showNodes();
+  setInterval(function () { if (!document.hidden) mv.showNodes(); }, 30000);
   var flights = {};                 // flight_id -> {meta, points[], marker, line}
   var fitted = false;
 

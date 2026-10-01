@@ -83,6 +83,7 @@
     if (el('fGroup').value) p.set('group_id', el('fGroup').value);
     if (el('fDrone').value) p.set('drone_id', el('fDrone').value);
     if (el('fTag').value) p.set('tag', el('fTag').value);
+    if (el('fNode').value) p.set('rx_node', el('fNode').value);
     return p;
   }
 
@@ -97,7 +98,9 @@
     if (el('fGroup').value) u.set('group', el('fGroup').value);
     if (el('fDrone').value) u.set('drone', el('fDrone').value);
     if (el('fTag').value) u.set('tag', el('fTag').value);
+    if (el('fNode').value) u.set('node', el('fNode').value);
     if (state.kind === 'pilot') u.set('spots', 'pilot');
+    if (state.cover) u.set('cover', '1');
     var q = u.toString();
     history.replaceState(null, '', location.pathname + (q ? '?' + q : ''));
   }
@@ -116,10 +119,13 @@
     if (u.get('to')) el('fTo').value = u.get('to');
     ensureOption(el('fGroup'), u.get('group'), 'group #' + u.get('group'));
     ensureOption(el('fDrone'), u.get('drone'), 'drone #' + u.get('drone'));
+    ensureOption(el('fNode'), u.get('node'), 'receiver #' + u.get('node'));
     el('fGroup').value = u.get('group') || '';
     el('fDrone').value = u.get('drone') || '';
+    el('fNode').value = u.get('node') || '';
     el('fTag').value = TAGS.indexOf(u.get('tag')) !== -1 ? u.get('tag') : '';
     state.kind = u.get('spots') === 'pilot' ? 'pilot' : 'launch';
+    state.cover = u.get('cover') === '1';
     showCustom();
     showKind();
   }
@@ -137,8 +143,12 @@
   function loadOptions() {
     el('fTag').innerHTML = '<option value="">all tags</option>'
       + TAGS.map(function (t) { return '<option>' + t + '</option>'; }).join('');
-    return Promise.all([fetch('/api/groups').then(json), fetch('/api/drones').then(json)])
+    return Promise.all([fetch('/api/groups').then(json), fetch('/api/drones').then(json),
+                        fetch('/api/nodes').then(json)])
       .then(function (res) {
+        el('fNode').innerHTML = '<option value="">any receiver</option>' + (res[2] || []).map(function (n) {
+          return '<option value="' + n.id + '">' + esc(n.name) + '</option>';
+        }).join('');
         el('fGroup').innerHTML = '<option value="">all groups</option>' + (res[0] || []).map(function (g) {
           return '<option value="' + g.id + '">' + esc(g.name) + '</option>';
         }).join('');
@@ -358,7 +368,81 @@
   function showKind() {
     el('kLaunch').setAttribute('aria-pressed', String(state.kind === 'launch'));
     el('kPilot').setAttribute('aria-pressed', String(state.kind === 'pilot'));
+    el('kCover').setAttribute('aria-pressed', String(!!state.cover));
   }
+
+  // -- receivers --------------------------------------------------------------------------
+  // Receivers sit on the map as diamonds; "Coverage" adds a circle per receiver
+  // at its far (95th percentile) range - where another node would extend reach.
+  var coverLayer = L.layerGroup().addTo(mv.map);
+
+  function fmtM(m) {
+    if (m === null || m === undefined) return '-';
+    return m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + ' km' : Math.round(m) + ' m';
+  }
+
+  function drawReceivers() {
+    var r = state.rx;
+    coverLayer.clearLayers();
+    if (!r || !r.nodes) return;
+    mv.setNodes(r.nodes.map(function (n) {
+      return { id: n.id, name: n.name, kind: n.kind, lat: n.lat, lon: n.lon,
+               status: n.status || 'online', last_detection_at: n.last_heard };
+    }));
+    if (!state.cover) return;
+    r.nodes.forEach(function (n) {
+      if (n.lat === null || !n.range) return;
+      L.circle([n.lat, n.lon], {
+        radius: n.range.p95_m, color: '#4fc3f7', weight: 1.5, dashArray: '6 5',
+        fillColor: '#4fc3f7', fillOpacity: 0.06, interactive: false
+      }).addTo(coverLayer);
+    });
+  }
+
+  function renderReceivers(r) {
+    state.rx = r && !r.error ? r : null;
+    if (!state.rx) { el('rx').innerHTML = '<tr><td class="an-empty">Could not load.</td></tr>'; return; }
+    var rows = r.nodes.filter(function (n) { return n.flights || n.kind === 'local' || n.lat !== null; });
+    if (!rows.length) { el('rx').innerHTML = '<tr><td class="an-empty">No receivers yet.</td></tr>'; return; }
+    var maxF = Math.max.apply(null, rows.map(function (n) { return n.flights; }).concat([1]));
+    el('rx').innerHTML = '<thead><tr><th class="nosort">Receiver</th><th class="nosort r">Flights</th>'
+      + '<th class="nosort r">Drones</th><th class="nosort r">Receptions</th><th class="nosort r">Best RSSI</th>'
+      + '<th class="nosort r" title="median distance to what it heard">Typical range</th>'
+      + '<th class="nosort r" title="95th percentile">Far range</th><th class="nosort r">Farthest</th>'
+      + '</tr></thead><tbody>' + rows.map(function (n) {
+        var st = n.status || '';
+        var range = n.lat === null
+          ? '<td colspan="3" class="dim" style="text-align:right">no location set (Nodes page)</td>'
+          : !n.range ? '<td colspan="3" class="dim" style="text-align:right">nothing heard here</td>'
+          : '<td class="num"' + tipAttrs(fmtM(n.range.p50_m), 'half of what ' + n.name + ' heard was closer')
+            + '>' + fmtM(n.range.p50_m) + '</td>'
+            + '<td class="num"' + tipAttrs(fmtM(n.range.p95_m), '95% was closer; the coverage circle')
+            + '>' + fmtM(n.range.p95_m) + '</td>'
+            + '<td class="num"' + tipAttrs(fmtM(n.range.max_m), 'over ' + plural(n.range.samples, 'position'))
+            + '>' + fmtM(n.range.max_m) + '</td>';
+        return '<tr class="go" data-node="' + n.id + '">'
+          + '<td>' + esc(n.name) + ' <span class="badge st-' + esc(st) + '">'
+          + esc((MapView.NODE_STATUS || {})[st] || st || '?') + '</span></td>'
+          + '<td class="num">' + fmtInt(n.flights) + '<span class="ibar" style="width:'
+          + Math.max(2, Math.round(48 * n.flights / maxF)) + 'px"></span></td>'
+          + '<td class="num">' + fmtInt(n.drones) + '</td><td class="num">' + fmtInt(n.receptions) + '</td>'
+          + '<td class="num">' + (n.max_rssi !== null ? n.max_rssi + ' dBm' : '-') + '</td>'
+          + range + '</tr>';
+      }).join('') + '</tbody>';
+  }
+
+  el('rx').addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-node]');
+    if (!tr) return;
+    el('fNode').value = tr.getAttribute('data-node');
+    refresh();
+  });
+  el('kCover').addEventListener('click', function () {
+    state.cover = !state.cover;
+    showKind();
+    saveUrl();
+    drawReceivers();
+  });
   el('kLaunch').addEventListener('click', function () {
     if (state.kind === 'launch') return;
     state.kind = 'launch'; showKind(); saveUrl(); loadCells(true);
@@ -550,15 +634,21 @@
     });
     fetch('/api/analysis/radio?' + q).then(json).then(function (r) { if (my === gen) renderRadio(r); })
       .catch(function () { renderRadio(null); });
+    fetch('/api/analysis/nodes?' + q).then(json).then(function (r) {
+      if (my !== gen) return;
+      renderReceivers(r);
+      drawReceivers();
+    }).catch(function () { renderReceivers(null); });
     loadCells(true);
   }
 
-  ['fGroup', 'fDrone', 'fTag', 'fFrom', 'fTo'].forEach(function (id) {
+  ['fGroup', 'fDrone', 'fTag', 'fNode', 'fFrom', 'fTo'].forEach(function (id) {
     el(id).addEventListener('change', refresh);
   });
   el('fRange').addEventListener('change', function () { showCustom(); refresh(); });
   el('fReset').addEventListener('click', function () {
     el('fRange').value = 'all'; el('fGroup').value = ''; el('fDrone').value = ''; el('fTag').value = '';
+    el('fNode').value = '';
     el('fFrom').value = ''; el('fTo').value = '';
     showCustom();
     refresh();

@@ -217,6 +217,13 @@ def drone_summary(db, drone_id):
     out['macs'] = [dict(r) for r in db.query(
         "SELECT mac, first_seen, last_seen FROM drone_macs WHERE drone_id=? ORDER BY last_seen DESC",
         (drone_id,))]
+    # Which receivers have heard this airframe, and how well.
+    out['heard_by'] = [dict(r) for r in db.query(
+        "SELECT n.id, n.name, COUNT(*) AS flights, SUM(fn.receptions) AS receptions,"
+        " MAX(fn.max_rssi) AS max_rssi, MAX(fn.last_ts) AS last_ts"
+        " FROM flight_nodes fn JOIN flights f ON f.id = fn.flight_id"
+        " JOIN nodes n ON n.id = fn.node_id WHERE f.drone_id=?"
+        " GROUP BY n.id ORDER BY flights DESC, receptions DESC", (drone_id,))]
     out['display_color'] = display_color(out['color'], out['group_color'], out['id'])
     # The registry blob is replaced by its summary, plus what the serial's own
     # structure says - which needs no network at all.

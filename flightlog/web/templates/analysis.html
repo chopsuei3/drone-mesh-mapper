@@ -47,7 +47,7 @@
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; }
   .seg button + button { border-left: 1px solid var(--line); }
-  .seg button[aria-pressed="true"] { background: var(--accent-dim); color: #eaf6ff; }
+  .seg button[aria-pressed="true"], #kCover[aria-pressed="true"] { background: var(--accent-dim); color: #eaf6ff; }
   .leaflet-tooltip.an-count { background: none; border: 0; box-shadow: none; padding: 0;
                               color: #0b0b0b; font-weight: 700; font-size: 11px; }
   .leaflet-tooltip.an-count::before { display: none; }
@@ -113,6 +113,8 @@
   <select id="fDrone"><option value="">all drones</option></select>
   <label for="fTag">tag</label>
   <select id="fTag"><option value="">all tags</option></select>
+  <label for="fNode">heard by</label>
+  <select id="fNode"><option value="">any receiver</option></select>
   <button id="fReset">Reset</button>
   <span class="spacer dim" id="fStatus"></span>
 </div>
@@ -139,9 +141,19 @@
           <button id="kLaunch" aria-pressed="true">Launch points</button>
           <button id="kPilot" aria-pressed="false">Operator positions</button>
         </div>
+        <button id="kCover" aria-pressed="false"
+                title="A circle per receiver at its far range (95th percentile)">Coverage</button>
       </div>
     </div>
     <div class="an-map"><div id="map"></div><div class="an-legend" id="mapLegend" hidden></div></div>
+
+    <div class="an-head">
+      <h2>Receivers</h2>
+      <span class="note">who heard these flights, and from how far &middot; range runs from a
+        receiver&rsquo;s location to the drone positions it heard: typical is the median, far the
+        95th percentile &middot; click a row to keep only flights it heard</span>
+    </div>
+    <div class="card" style="overflow-x:auto"><table id="rx"></table></div>
 
     <div class="an-head">
       <h2>Who</h2>
