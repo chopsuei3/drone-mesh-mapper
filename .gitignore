@@ -45,6 +45,12 @@ flightlog.db-wal
 flightlog.db-shm
 flightlog_ports.json
 
+# ── flightlog relay (remote Pis): the config holds the node's token ─
+flightlog_relay.json
+flightlog_relay.db
+flightlog_relay.db-wal
+flightlog_relay.db-shm
+
 # ── Offline map tile cache (large, regenerable) ────────────
 tiles/*.mbtiles
 tiles/*.mbtiles-*
