@@ -10,8 +10,6 @@
   var LABEL = MapView.NODE_STATUS;
   var BAD_RESETS = ['panic', 'int_watchdog', 'task_watchdog', 'watchdog', 'brownout'];
   var POLL_MS = 5000;
-  // The image the Docker install command runs (built by .github/workflows/container.yml).
-  var RELAY_IMAGE = 'ghcr.io/chopsuei3/drone-mesh-mapper:latest';
   var state = { nodes: [], sel: null, placing: null, reveal: null, shown: null, fitted: false };
 
   var mv = new MapView('map');
@@ -223,16 +221,13 @@
   function installCmd(name, token) {
     return 'python3 RPI/install_relay.py --server ' + serverUrl() + ' --token ' + token + ' --name ' + name;
   }
-  // The same relay as a container: /dev and the tty cgroup rules (ttyACM, ttyUSB)
-  // so a replugged XIAO is found again, the host's avahi socket so .local names
-  // resolve, and the spool in ~/flightlog-relay.
+  // The same relay as a container, built from the checkout by compose.relay.yml.
+  // The settings go in .env, so `git pull` and a fresh `up` keep them.
   function dockerCmd(name, token) {
-    return ['docker run -d --name flightlog-relay --restart unless-stopped --network host',
-      "-v /dev:/dev --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw'",
-      '-v /run/avahi-daemon:/run/avahi-daemon -v ~/flightlog-relay:/data',
-      '--log-opt max-size=10m --log-opt max-file=3',
-      '-e FLIGHTLOG_SERVER=' + serverUrl() + ' -e FLIGHTLOG_TOKEN=' + token + ' -e FLIGHTLOG_NODE=' + name,
-      RELAY_IMAGE + ' relay'].join(' \\\n  ');
+    return ["printf 'FLIGHTLOG_SERVER=%s\\nFLIGHTLOG_TOKEN=%s\\nFLIGHTLOG_NODE=%s\\n' "
+              + serverUrl() + ' ' + token + ' ' + name + ' > .env',
+      'chmod 600 .env',
+      'docker compose -f compose.relay.yml up -d'].join('\n');
   }
   function showToken() {
     var r = state.reveal, box = r && el('dToken');
@@ -244,7 +239,7 @@
       + ' <span class="mono">flightlog/</span> and <span class="mono">RPI/</span>:</div>'
       + '<pre class="mono" id="cmdText"></pre>'
       + '<button id="cmdCopy">Copy command</button> <span id="cmdMsg" class="dim"></span>'
-      + '<div class="dim" style="margin-top:10px">Or, on a machine with Docker:</div>'
+      + '<div class="dim" style="margin-top:10px">Or, with Docker, in a clone of this repo:</div>'
       + '<pre class="mono" id="dockerText"></pre>'
       + '<button id="dockerCopy">Copy Docker command</button> <span id="dockerMsg" class="dim"></span></div>';
     el('cmdText').textContent = installCmd(r.name, r.token);
