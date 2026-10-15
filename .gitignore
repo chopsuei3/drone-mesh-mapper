@@ -51,9 +51,9 @@ flightlog_relay.db
 flightlog_relay.db-wal
 flightlog_relay.db-shm
 
-# ── Docker: compose run from docker/ keeps its state there ──
-docker/data/
-docker/tiles/
+# ── Docker: what compose.yml / compose.relay.yml keep beside them ──
+/data/
+/tailscale/
 
 # ── Offline map tile cache (large, regenerable) ────────────
 tiles/*.mbtiles

@@ -1,14 +1,16 @@
-# syntax=docker/dockerfile:1
+# flightlog server and relay in one image - the entrypoint picks the role.
+# Built on each machine from its checkout:
 #
-# flightlog server and relay in one image - the entrypoint picks the role:
-#
-#   docker run ... ghcr.io/chopsuei3/drone-mesh-mapper            # server on :5001
-#   docker run ... ghcr.io/chopsuei3/drone-mesh-mapper relay      # a remote site's relay
+#   docker compose up -d                              # server on :5001 (compose.yml)
+#   docker compose -f compose.relay.yml up -d         # a remote site's relay
+#   docker build -t flightlog:local .                 # just the image
 #
 # Everything that changes at runtime lives in /data (bind-mount it): the
 # database, the selected ports, the raw serial log, and the relay's config and
-# spool. Offline tiles go in /app/tiles. See docker/compose.yml and
-# flightlog/README.md#docker.
+# spool. Offline tiles go in /app/tiles. See flightlog/README.md#docker.
+#
+# Kept to what the legacy builder understands (no BuildKit-only syntax), so
+# Debian's own docker.io on a 32-bit Pi can build it too.
 FROM python:3.13-slim-trixie
 
 # tini: PID 1 that forwards SIGTERM, so `docker stop` is immediate.
@@ -27,9 +29,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY static/ static/
 COPY mapper_test/ mapper_test/
 COPY flightlog/ flightlog/
-COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/flightlog-entrypoint
+COPY docker/entrypoint.sh /usr/local/bin/flightlog-entrypoint
 # A Windows checkout can still hand over CRLF line endings; sh would choke on them.
-RUN sed -i 's/\r$//' /usr/local/bin/flightlog-entrypoint && mkdir -p /data /app/tiles
+RUN sed -i 's/\r$//' /usr/local/bin/flightlog-entrypoint \
+ && chmod 755 /usr/local/bin/flightlog-entrypoint \
+ && mkdir -p /data /app/tiles
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -1,0 +1,91 @@
+# flightlog server, built on this machine from this checkout. On the machine the
+# XIAO is plugged into:
+#
+#   git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
+#   cd ~/drone-mesh-mapper
+#   docker compose up -d
+#
+# Then open http://<this-machine>:5001/sources and tick the XIAO's port.
+#
+#   data/    flightlog.db, flightlog_ports.json, flightlog_serial.log
+#   tiles/   offline .mbtiles basemaps (the same directory mesh-mapper.py uses)
+#
+# Update: git pull && docker compose up -d      (every `up` rebuilds; unchanged parts come from cache)
+# Logs:   docker logs -f flightlog
+#
+# Optional settings go in a file named .env beside this one:
+#   FLIGHTLOG_PORT=5001
+#   COMPOSE_PROFILES=tailscale      # also join a tailnet; see the tailscale service below
+#   TS_AUTHKEY=tskey-auth-...
+name: flightlog
+services:
+  flightlog:
+    image: flightlog:local
+    build: .
+    pull_policy: never           # built here, never fetched from a registry
+    container_name: flightlog
+    # Extra flightlog flags go after "server", e.g. ["server", "--retention-days", "90"]
+    command: ["server"]
+    # Relays reach it at this machine's address, as without Docker.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      FLIGHTLOG_PORT: ${FLIGHTLOG_PORT:-5001}
+      # TZ: America/Los_Angeles      # instead of the /etc/localtime mount below
+    volumes:
+      - ./data:/data
+      - ./tiles:/app/tiles
+      # USB serial: all of /dev, so a XIAO that comes back from a replug as
+      # ttyACM1 is found again, and the Sources page lists ports as it would
+      # without Docker...
+      - /dev:/dev
+      # The Analysis page buckets flights by local hour; containers default to UTC.
+      - /etc/localtime:/etc/localtime:ro
+    # ...with access to serial devices only: 166 is ttyACM (the XIAO's own USB),
+    # 188 is ttyUSB (USB-serial bridges). If the port still says "permission
+    # denied", replace these two rules with `privileged: true`.
+    device_cgroup_rules:
+      - 'c 166:* rmw'
+      - 'c 188:* rmw'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/settings' % os.environ.get('FLIGHTLOG_PORT', '5001'), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    # Request logs add up; keep them from filling an SD card.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # Joins this machine to your tailnet, so relays at other sites can reach the
+  # server at its 100.x.y.z address without Tailscale installed on the host.
+  # Off unless .env has COMPOSE_PROFILES=tailscale. With no TS_AUTHKEY it prints
+  # a login URL: docker logs flightlog-tailscale. Don't also run Tailscale on
+  # the host.
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: flightlog-tailscale
+    profiles: ["tailscale"]
+    # The tailnet interface lives on the host, so flightlog needs no changes.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"              # the key is only needed the first time
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"             # a real interface, which flightlog's traffic can use
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - ./tailscale:/var/lib/tailscale  # the node's identity; kept out of data/
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

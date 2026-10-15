@@ -22,8 +22,8 @@ RPI/
 
 # Runtime state - never baked into an image.
 tiles/
-docker/data/
-docker/tiles/
+data/
+tailscale/
 **/*.db
 **/*.db-wal
 **/*.db-shm

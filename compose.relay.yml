@@ -1,0 +1,86 @@
+# flightlog relay: a XIAO at another site, forwarded to the flightlog server.
+# Built on this machine from this checkout. Add the node on the server's Nodes
+# page first; it shows the token once, and the commands below. Then, on the
+# machine this XIAO is plugged into:
+#
+#   git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
+#   cd ~/drone-mesh-mapper
+#
+# and in a file named .env beside this one (chmod 600 .env - it holds the token):
+#
+#   FLIGHTLOG_SERVER=http://fl-host.local:5001
+#   FLIGHTLOG_TOKEN=flr_...
+#   FLIGHTLOG_NODE=north
+#   # FLIGHTLOG_PORTS=/dev/ttyACM0     # default: auto, every Espressif USB device
+#   # FLIGHTLOG_HEARTBEAT=60           # default 10 s; raise it on a metered link
+#   # COMPOSE_PROFILES=tailscale       # reach the server over Tailscale; see below
+#   # TS_AUTHKEY=tskey-auth-...
+#
+#   docker compose -f compose.relay.yml up -d
+#
+#   data/    flightlog_relay.db - the spool; every line stays there until the server has it
+#
+# Update: git pull && docker compose -f compose.relay.yml up -d
+# Status: docker exec flightlog-relay python -m flightlog.relay --status
+# Logs:   docker logs -f flightlog-relay
+name: flightlog-relay
+services:
+  relay:
+    image: flightlog:local
+    build: .
+    pull_policy: never           # built here, never fetched from a registry
+    container_name: flightlog-relay
+    command: ["relay"]
+    # The Nodes page shows this machine's own hostname, not a container id.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      FLIGHTLOG_SERVER: ${FLIGHTLOG_SERVER:?set FLIGHTLOG_SERVER in .env}
+      FLIGHTLOG_TOKEN: ${FLIGHTLOG_TOKEN:?set FLIGHTLOG_TOKEN in .env}
+      FLIGHTLOG_NODE: ${FLIGHTLOG_NODE:-}
+      FLIGHTLOG_PORTS: ${FLIGHTLOG_PORTS:-auto}
+      FLIGHTLOG_HEARTBEAT: ${FLIGHTLOG_HEARTBEAT:-}
+    volumes:
+      - ./data:/data
+      # USB serial, as in compose.yml: all of /dev plus the tty cgroup rules.
+      - /dev:/dev
+      # The host's avahi-daemon, so a server named fl-host.local resolves.
+      - /run/avahi-daemon:/run/avahi-daemon
+    device_cgroup_rules:
+      - 'c 166:* rmw'
+      - 'c 188:* rmw'
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # Joins this machine to your tailnet, for a site the server's LAN cannot
+  # reach. Off unless .env has COMPOSE_PROFILES=tailscale. Set FLIGHTLOG_SERVER
+  # to the server's Tailscale address, http://100.x.y.z:5001 - MagicDNS names
+  # do not resolve inside the containers. With no TS_AUTHKEY it prints a login
+  # URL: docker logs flightlog-relay-tailscale. Don't also run Tailscale on
+  # the host.
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: flightlog-relay-tailscale
+    profiles: ["tailscale"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - ./tailscale:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
