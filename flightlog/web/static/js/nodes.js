@@ -10,6 +10,8 @@
   var LABEL = MapView.NODE_STATUS;
   var BAD_RESETS = ['panic', 'int_watchdog', 'task_watchdog', 'watchdog', 'brownout'];
   var POLL_MS = 5000;
+  // The image the Docker install command runs (built by .github/workflows/container.yml).
+  var RELAY_IMAGE = 'ghcr.io/chopsuei3/drone-mesh-mapper:latest';
   var state = { nodes: [], sel: null, placing: null, reveal: null, shown: null, fitted: false };
 
   var mv = new MapView('map');
@@ -221,17 +223,32 @@
   function installCmd(name, token) {
     return 'python3 RPI/install_relay.py --server ' + serverUrl() + ' --token ' + token + ' --name ' + name;
   }
+  // The same relay as a container: /dev and the tty cgroup rules (ttyACM, ttyUSB)
+  // so a replugged XIAO is found again, the host's avahi socket so .local names
+  // resolve, and the spool in ~/flightlog-relay.
+  function dockerCmd(name, token) {
+    return ['docker run -d --name flightlog-relay --restart unless-stopped --network host',
+      "-v /dev:/dev --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw'",
+      '-v /run/avahi-daemon:/run/avahi-daemon -v ~/flightlog-relay:/data',
+      '--log-opt max-size=10m --log-opt max-file=3',
+      '-e FLIGHTLOG_SERVER=' + serverUrl() + ' -e FLIGHTLOG_TOKEN=' + token + ' -e FLIGHTLOG_NODE=' + name,
+      RELAY_IMAGE + ' relay'].join(' \\\n  ');
+  }
   function showToken() {
     var r = state.reveal, box = r && el('dToken');
     if (!box) return;
     box.innerHTML = '<div class="tokenbox"><b>Token for ' + esc(r.name) + '</b>'
-      + ' <span class="warnline">&mdash; shown only now.</span> Copy the command; a lost token'
+      + ' <span class="warnline">&mdash; shown only now.</span> Copy a command; a lost token'
       + ' is replaced with <i>New token</i>.'
       + '<div class="dim" style="margin-top:6px">On the remote Pi, in the directory holding'
       + ' <span class="mono">flightlog/</span> and <span class="mono">RPI/</span>:</div>'
       + '<pre class="mono" id="cmdText"></pre>'
-      + '<button id="cmdCopy">Copy command</button> <span id="cmdMsg" class="dim"></span></div>';
+      + '<button id="cmdCopy">Copy command</button> <span id="cmdMsg" class="dim"></span>'
+      + '<div class="dim" style="margin-top:10px">Or, on a machine with Docker:</div>'
+      + '<pre class="mono" id="dockerText"></pre>'
+      + '<button id="dockerCopy">Copy Docker command</button> <span id="dockerMsg" class="dim"></span></div>';
     el('cmdText').textContent = installCmd(r.name, r.token);
+    el('dockerText').textContent = dockerCmd(r.name, r.token);
     box.scrollIntoView({ block: 'nearest' });
   }
 
@@ -340,15 +357,17 @@
     }
   });
 
+  // cmdCopy copies cmdText and reports in cmdMsg; dockerCopy likewise.
   document.addEventListener('click', function (e) {
-    if (e.target.id !== 'cmdCopy') return;
-    var text = el('cmdText').textContent;
-    var done = function (ok) { el('cmdMsg').textContent = ok ? 'copied' : 'select the text and copy it'; };
+    var k = e.target.id === 'cmdCopy' ? 'cmd' : e.target.id === 'dockerCopy' ? 'docker' : null;
+    if (!k) return;
+    var pre = el(k + 'Text'), text = pre.textContent;
+    var done = function (ok) { el(k + 'Msg').textContent = ok ? 'copied' : 'select the text and copy it'; };
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
     } else {
       var range = document.createRange();
-      range.selectNodeContents(el('cmdText'));
+      range.selectNodeContents(pre);
       var sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
