@@ -128,19 +128,19 @@ cd ~/mesh-mapper && python3 mesh-mapper.py
 
 ## Docker
 
-flightlog also runs in Docker. Each machine builds the image itself from its own clone of this
-repo, and one image serves both roles:
+One image runs both the server and the [relays](#more-receivers-relays-at-other-sites):
+`ghcr.io/chopsuei3/drone-mesh-mapper`. It is built for:
 
-- **the server**, run by `compose.yml`;
-- **the [relays](#more-receivers-relays-at-other-sites)**, run by `compose.relay.yml`.
+- **amd64:** PCs.
+- **arm64:** 64-bit Pis and TV boxes such as the X96.
+- **armv7:** 32-bit Pis.
 
-It builds on PCs, on 64-bit Pis and TV boxes such as the X96, and on 32-bit Pis (armv7). A Pi 1 or
-Zero (armv6) has no Docker; use the installer above.
+A Pi 1 or Zero (armv6) has no Docker; use the installer above. Nothing needs cloning: a compose
+file and two directories are the whole install.
 
-Install git and Docker once, then log out and back in:
+Install Docker once, then log out and back in:
 
 ```sh
-sudo apt install -y git
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER
 ```
@@ -151,34 +151,34 @@ On 32-bit Raspberry Pi OS, Docker's own packages end with Engine 28. Use Debian'
 Then, on the machine the XIAO is plugged into:
 
 ```sh
-git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
-cd ~/drone-mesh-mapper
+mkdir -p ~/flightlog && cd ~/flightlog
+curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/compose.yml
 docker compose up -d
 ```
 
-The first start builds the image. That takes a few minutes on a Pi, mostly downloading Python
-and its packages; later builds reuse them and take seconds.
-
-Then open `http://<host>:5001/sources`, tick the XIAO's port, and wait for `alive`, as without
-Docker. Everything the app writes stays in the checkout, where git ignores it:
+Open `http://<host>:5001/sources`, tick the XIAO's port, and wait for `alive`, as without
+Docker. Everything the app writes lands beside the compose file:
 
 ```
-~/drone-mesh-mapper/
+~/flightlog/
   compose.yml
   data/       flightlog.db, flightlog_ports.json (the ticked ports), flightlog_serial.log
-  tiles/      offline .mbtiles basemaps; the directory mesh-mapper.py caches into
+  tiles/      offline .mbtiles basemaps: drop files in and refresh the page
   .env        optional settings, such as FLIGHTLOG_PORT=5002
 ```
 
 ```sh
 docker logs -f flightlog                         # what it is doing
-git pull && docker compose up -d --build         # update: rebuild from the new code
+docker compose pull && docker compose up -d      # update to the newest image
 docker compose down                              # stop; data/ and tiles/ stay
-tail -f data/flightlog_serial.log                # raw serial output
+tail -f ~/flightlog/data/flightlog_serial.log    # raw serial output
 ```
 
 Flags go after `server` in the compose file's `command:`, for example
 `["server", "--retention-days", "90"]`.
+
+`compose.yml` is also at the root of this repo. `docker compose up -d` in a clone works the same
+way, with `data/` and the repo's `tiles/` in the checkout.
 
 ### How the container is set up
 
@@ -197,25 +197,19 @@ Flags go after `server` in the compose file's `command:`, for example
   directories then work on any distribution without matching group ids. There is still no login,
   so keep it on your LAN or tailnet.
 - **Logs** are capped at 3 × 10 MB, so request logs cannot fill an SD card.
-- **Built here.** The image is `flightlog:local`, and compose never looks for it in a registry.
 
 ### Moving from the systemd service
 
-In the same checkout, stop the service and copy the database, with its `-wal` and `-shm` files,
-and the port selection into `data/`. `tiles/` is already the directory it used.
+Stop the service, then copy the database, with its `-wal` and `-shm` files, the port selection,
+and any offline maps:
 
 ```sh
-cd ~/drone-mesh-mapper
 sudo systemctl disable --now flightlog
-mkdir -p data
-cp flightlog.db* flightlog_ports.json data/
-docker compose up -d
+mkdir -p ~/flightlog/data ~/flightlog/tiles
+cp ~/drone-mesh-mapper/flightlog.db* ~/drone-mesh-mapper/flightlog_ports.json ~/flightlog/data/
+cp ~/drone-mesh-mapper/tiles/*.mbtiles ~/flightlog/tiles/      # if you have any
+cd ~/flightlog && docker compose up -d
 ```
-
-To go back:
-1. Stop it: `docker compose down`.
-2. Copy `data/flightlog.db*` back to the checkout.
-3. Restart the service: `sudo systemctl enable --now flightlog`.
 
 To import `mesh-mapper.py` history into a new install, put `cumulative_detections.csv` in
 `data/` before the first `up`. `aliases.json`, `drone_tags.json` and `faa_cache.csv` can go there
@@ -237,11 +231,16 @@ COMPOSE_PROFILES=tailscale
 TS_AUTHKEY=tskey-auth-...
 ```
 
-- **The key.** Make one in the Tailscale admin console, under *Settings → Keys*. For a test box,
-  tick *Ephemeral*, so the box leaves your tailnet when it stops.
+- **The key.** Make one in the Tailscale admin console, under *Settings → Keys → Generate auth
+  key*.
+  - Tick **Reusable** to use one key for every box.
+  - Tick **Ephemeral** only for test boxes, which then leave your tailnet when they stop.
   - The key is used only the first time. The box's identity then lives in `tailscale/`, beside
     `data/`.
   - Without `TS_AUTHKEY`, `docker logs flightlog-tailscale` prints a login URL instead.
+- **Unattended boxes.** A device's Tailscale login expires after 180 days by default. In the
+  admin console, open the machine's menu and choose *Disable key expiry*, or give the boxes a tag
+  (below), which turns expiry off.
 - **The server's address.** `docker exec flightlog-tailscale tailscale ip -4` prints it.
   - Relays use `http://100.x.y.z:5001` as `FLIGHTLOG_SERVER`.
   - Enter the same address in *relays reach this server at* on the Nodes page.
@@ -250,13 +249,29 @@ TS_AUTHKEY=tskey-auth-...
   flightlog and the relay need nothing else, and the box shows up on your tailnet under its own
   hostname. Don't run Tailscale on the host as well.
 - **Extra `tailscale up` flags** go in `TS_EXTRA_ARGS`, for example `--advertise-tags=tag:flightlog`.
+  That tag has to be in your tailnet policy's `tagOwners` first.
+- **Access rules.** A tailnet with the default policy lets every device reach every other. If
+  yours restricts traffic, allow the relays to reach the server on TCP 5001.
 - **A `/dev/net/tun` error** means the kernel module is not loaded: `sudo modprobe tun`.
 
-### Prebuilt images
+### Where the image comes from
 
-`.github/workflows/container.yml` can build the image for all three architectures and publish it
-to `ghcr.io/chopsuei3/drone-mesh-mapper`. It is manual for now: on GitHub, open *Actions →
-container → Run workflow*. Nothing above depends on it.
+`.github/workflows/container.yml` builds and publishes it on every push that touches the app.
+
+- `latest` is the newest build of `city-wide-tracking`.
+- Every build is also tagged `sha-<commit>`, so you can pin one with
+  `FLIGHTLOG_IMAGE=ghcr.io/chopsuei3/drone-mesh-mapper:sha-<commit>` in `.env`.
+
+To build it yourself instead, from a clone:
+
+```sh
+docker build -t flightlog:local .
+echo FLIGHTLOG_IMAGE=flightlog:local >> .env
+docker compose up -d
+```
+
+The Dockerfile avoids BuildKit-only syntax, so Debian's `docker.io` can build it too. With a
+local image, update with `git pull` and `docker build` rather than `docker compose pull`.
 
 ## Feeding it
 
@@ -382,25 +397,21 @@ python3 RPI/install_relay.py --uninstall     # keeps the config and the spool
 
 ### Or: the relay in Docker
 
-On a machine with Docker (an X96 box, or any Pi except a Pi 1 or Zero), install git and Docker
-and clone this repo, as in [Docker](#docker):
+On a machine with Docker (an X96 box, or any Pi except a Pi 1 or Zero), the relay needs no
+checkout and no Python. When you create a node, the Nodes page shows these lines under the
+install command, with the server address, token and name filled in. Run them on the remote
+machine:
 
 ```sh
-git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
-cd ~/drone-mesh-mapper
-```
-
-When you create a node, the Nodes page shows three lines under the install command, with the
-server address, token and name filled in. Run them in that directory:
-
-```sh
+mkdir -p ~/flightlog-relay && cd ~/flightlog-relay
+curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/compose.relay.yml
 printf 'FLIGHTLOG_SERVER=%s\nFLIGHTLOG_TOKEN=%s\nFLIGHTLOG_NODE=%s\n' http://fl-host.local:5001 flr_... north > .env
 chmod 600 .env
 docker compose -f compose.relay.yml up -d
 ```
 
-They write the settings to `.env`, readable only by you because it holds the token, then build
-and start the relay. `.env` takes:
+They fetch the compose file, write the settings to `.env` (readable only by you, because it holds
+the token), then pull the image and start the relay. `.env` takes:
 
 | Variable | Same as | |
 |---|---|---|
@@ -416,15 +427,15 @@ To reach the server over Tailscale, add the settings in
 These variables work for `python3 -m flightlog.relay` without Docker too. A flag on the command
 line wins over the variable, and the variable wins over `flightlog_relay.json`.
 
-The spool, `flightlog_relay.db`, is in `data/`. It survives restarts and updates, so the relay
-still loses nothing.
+The spool, `flightlog_relay.db`, is in `~/flightlog-relay/data/`. It survives restarts and
+updates, so the relay still loses nothing.
 
 Unlike the installer, the container does not check the token before starting; it keeps retrying.
 
 ```sh
 docker exec flightlog-relay python -m flightlog.relay --status
 docker logs -f flightlog-relay
-git pull && docker compose -f compose.relay.yml up -d --build      # update
+docker compose -f compose.relay.yml pull && docker compose -f compose.relay.yml up -d   # update
 ```
 
 `.local` names resolve through the host's avahi-daemon, whose socket is mounted from
