@@ -65,10 +65,14 @@ and listed in a table you can sort, filter and export.
 - Geofences with enter/exit webhooks, offline MBTiles basemaps (shared with `mesh-mapper.py`),
   optional retention, a Raspberry Pi installer that sets up a systemd service, and an importer
   for `mesh-mapper.py`'s CSV history.
-- **Docker**: one image runs the server and the relays. It is published to GHCR for PCs, 64-bit
-  Pis and TV boxes, and 32-bit Pis. A compose file and `docker compose up -d` replace the
-  installer, and the Nodes page gives each new relay a ready-made `docker run` command. See
-  [Docker](flightlog/README.md#docker).
+- **Docker**: one image runs the server and the relays, and each machine builds it from its
+  checkout. That works on PCs, 64-bit Pis and TV boxes, and 32-bit Pis.
+  - `docker compose up -d` replaces the installer.
+  - The Nodes page gives each new relay its Docker commands.
+  - An optional Tailscale container joins a box to your tailnet with nothing installed on the
+    host.
+
+  See [Docker](flightlog/README.md#docker).
 
 flightlog serves on port 5001 and has **no login** — run it on your LAN or a private VPN only.
 
@@ -121,9 +125,12 @@ variants are unchanged from upstream.
 - **flightlog**: city-wide tracking — remote relays (`python -m flightlog.relay`,
   `RPI/install_relay.py`), the Nodes page, heard-by and coverage, and node alerts. The design
   is in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md).
-- **flightlog**: Docker. One multi-arch image for the server and the relays, published to
-  `ghcr.io/chopsuei3/drone-mesh-mapper` by GitHub Actions. It comes with compose files for both
-  roles and a `docker run` command for each new node on the Nodes page.
+- **flightlog**: Docker. One image for the server and the relays, built on each machine. It
+  comes with:
+  - compose files for both roles;
+  - an optional Tailscale container;
+  - Docker commands for each new node on the Nodes page;
+  - a manual GitHub Actions workflow that can publish multi-arch images to GHCR later.
 
 ---
 
@@ -187,15 +194,21 @@ the port and the autostart from `mesh-mapper.py` (`--replace-legacy`).
 
 ### flightlog (Docker)
 ```bash
-curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER   # once, then log back in
-mkdir -p ~/flightlog && cd ~/flightlog
-curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/docker/compose.yml
+sudo apt install -y git && curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER   # once, then log back in
+git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
+cd ~/drone-mesh-mapper
 docker compose up -d
 ```
 
-This is the same app on the same port, 5001, with its data in `~/flightlog/data`. Open **Sources** and tick
-the XIAO's port. Updates are `docker compose pull && docker compose up -d`. Details, moving an
-existing install over, and the relay in Docker: [flightlog/README.md#docker](flightlog/README.md#docker).
+The first `up` builds the image on this machine, which takes a few minutes on a Pi. This is the
+same app on the same port, 5001, with its data in `data/` in the checkout. Open **Sources** and
+tick the XIAO's port. Updates are `git pull && docker compose up -d --build`.
+
+[flightlog/README.md#docker](flightlog/README.md#docker) covers the rest:
+- 32-bit Pis;
+- moving an existing install over;
+- the relay in Docker;
+- an optional Tailscale container.
 
 ### flightlog (Raspberry Pi)
 ```bash
@@ -215,8 +228,8 @@ Raspberry Pi, with Tailscale up on both machines and `flightlog/` and `RPI/` cop
 ```bash
 python3 RPI/install_relay.py --server http://homepi:5001 --token flr_... --name north
 ```
-On a machine with Docker, run the `docker run` command the Nodes page shows instead; it needs
-no files from this repo. Step by step:
+On a machine with Docker, clone this repo instead and run the three lines the Nodes page shows
+under the install command. They write `.env` and start `compose.relay.yml`. Step by step:
 [More receivers](flightlog/README.md#more-receivers-relays-at-other-sites) and
 [the relay in Docker](flightlog/README.md#or-the-relay-in-docker).
 
@@ -692,8 +705,10 @@ drone-mesh-mapper/
 |-- flightlog/                  # This fork: the flight-first logger (see flightlog/README.md)
 |-- docs/plans/                 # This fork: design notes for planned work
 |-- Dockerfile                  # This fork: the flightlog image (server and relay)
-|-- docker/                     # This fork: entrypoint, compose.yml (server), compose.relay.yml
-|-- .github/workflows/          # This fork: builds and publishes the image to GHCR
+|-- compose.yml                 # This fork: the server in Docker (+ optional Tailscale)
+|-- compose.relay.yml           # This fork: a relay in Docker (+ optional Tailscale)
+|-- docker/                     # This fork: the image's entrypoint
+|-- .github/workflows/          # This fork: manual build + publish of the image to GHCR
 |-- requirements.txt
 |-- static/                     # Vendored UI assets (offline-capable)
 |   |-- leaflet/                # Leaflet 1.9.4
