@@ -1,0 +1,50 @@
+# flightlog relay: a XIAO at another site, forwarded to the flightlog server.
+# Add the node on the server's Nodes page first; it shows the token once. Then,
+# on the machine this XIAO is plugged into:
+#
+#   mkdir -p ~/flightlog-relay && cd ~/flightlog-relay
+#   curl -fsSL -o compose.yml https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/docker/compose.relay.yml
+#
+# and beside it a file named .env (chmod 600 .env - it holds the token):
+#
+#   FLIGHTLOG_SERVER=http://fl-host.local:5001
+#   FLIGHTLOG_TOKEN=flr_...
+#   FLIGHTLOG_NODE=north
+#   # FLIGHTLOG_PORTS=/dev/ttyACM0     # default: auto, every Espressif USB device
+#   # FLIGHTLOG_HEARTBEAT=60           # default 10 s; raise it on a metered link
+#
+#   docker compose up -d
+#
+#   data/    flightlog_relay.db - the spool; every line stays there until the server has it
+#
+# Status: docker exec flightlog-relay python -m flightlog.relay --status
+# Logs:   docker logs -f flightlog-relay
+name: flightlog-relay
+services:
+  relay:
+    image: ${FLIGHTLOG_IMAGE:-ghcr.io/chopsuei3/drone-mesh-mapper:latest}
+    container_name: flightlog-relay
+    command: ["relay"]
+    # The Nodes page shows this machine's own hostname, not a container id.
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      FLIGHTLOG_SERVER: ${FLIGHTLOG_SERVER:?set FLIGHTLOG_SERVER in .env}
+      FLIGHTLOG_TOKEN: ${FLIGHTLOG_TOKEN:?set FLIGHTLOG_TOKEN in .env}
+      FLIGHTLOG_NODE: ${FLIGHTLOG_NODE:-}
+      FLIGHTLOG_PORTS: ${FLIGHTLOG_PORTS:-auto}
+      FLIGHTLOG_HEARTBEAT: ${FLIGHTLOG_HEARTBEAT:-}
+    volumes:
+      - ./data:/data
+      # USB serial, as in compose.yml: all of /dev plus the tty cgroup rules.
+      - /dev:/dev
+      # The host's avahi-daemon, so a server named fl-host.local resolves.
+      - /run/avahi-daemon:/run/avahi-daemon
+    device_cgroup_rules:
+      - 'c 166:* rmw'
+      - 'c 188:* rmw'
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

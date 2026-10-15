@@ -51,6 +51,10 @@ flightlog_relay.db
 flightlog_relay.db-wal
 flightlog_relay.db-shm
 
+# ── Docker: compose run from docker/ keeps its state there ──
+docker/data/
+docker/tiles/
+
 # ── Offline map tile cache (large, regenerable) ────────────
 tiles/*.mbtiles
 tiles/*.mbtiles-*

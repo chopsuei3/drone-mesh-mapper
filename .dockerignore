@@ -1,0 +1,34 @@
+# The image needs only flightlog/, static/, mapper_test/, requirements.txt and
+# docker/entrypoint.sh (see Dockerfile). Keep the rest out of the build context.
+.git
+.github
+.vscode
+.idea
+**/__pycache__
+**/*.py[cod]
+**/.pio
+firmware/
+flasher/
+node-mode-dualcore/
+remoteid-mesh/
+remoteid-mesh-dualcore/
+remoteid-c5-5g/
+docs/
+RPI/
+/boards.png
+/eye.png
+/eyepurple.svg
+/mesh-mapper.py
+
+# Runtime state - never baked into an image.
+tiles/
+docker/data/
+docker/tiles/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.log
+**/.env
+flightlog_ports.json
+flightlog_relay.json
+*.csv
