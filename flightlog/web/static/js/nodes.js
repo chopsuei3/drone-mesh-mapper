@@ -10,6 +10,8 @@
   var LABEL = MapView.NODE_STATUS;
   var BAD_RESETS = ['panic', 'int_watchdog', 'task_watchdog', 'watchdog', 'brownout'];
   var POLL_MS = 5000;
+  // The relay's compose file; it runs the image .github/workflows/container.yml publishes.
+  var RELAY_COMPOSE = 'https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/compose.relay.yml';
   var state = { nodes: [], sel: null, placing: null, reveal: null, shown: null, fitted: false };
 
   var mv = new MapView('map');
@@ -221,11 +223,13 @@
   function installCmd(name, token) {
     return 'python3 RPI/install_relay.py --server ' + serverUrl() + ' --token ' + token + ' --name ' + name;
   }
-  // The same relay as a container, built from the checkout by compose.relay.yml.
-  // The settings go in .env, so `git pull` and a fresh `up` keep them.
+  // The same relay as a container: compose.relay.yml in ~/flightlog-relay, the
+  // settings in .env beside it, so updates (pull, up) keep them.
   function dockerCmd(name, token) {
-    return ["printf 'FLIGHTLOG_SERVER=%s\\nFLIGHTLOG_TOKEN=%s\\nFLIGHTLOG_NODE=%s\\n' "
-              + serverUrl() + ' ' + token + ' ' + name + ' > .env',
+    return ['mkdir -p ~/flightlog-relay && cd ~/flightlog-relay',
+      'curl -fsSLO ' + RELAY_COMPOSE,
+      "printf 'FLIGHTLOG_SERVER=%s\\nFLIGHTLOG_TOKEN=%s\\nFLIGHTLOG_NODE=%s\\n' "
+        + serverUrl() + ' ' + token + ' ' + name + ' > .env',
       'chmod 600 .env',
       'docker compose -f compose.relay.yml up -d'].join('\n');
   }
@@ -239,7 +243,7 @@
       + ' <span class="mono">flightlog/</span> and <span class="mono">RPI/</span>:</div>'
       + '<pre class="mono" id="cmdText"></pre>'
       + '<button id="cmdCopy">Copy command</button> <span id="cmdMsg" class="dim"></span>'
-      + '<div class="dim" style="margin-top:10px">Or, with Docker, in a clone of this repo:</div>'
+      + '<div class="dim" style="margin-top:10px">Or, on a machine with Docker:</div>'
       + '<pre class="mono" id="dockerText"></pre>'
       + '<button id="dockerCopy">Copy Docker command</button> <span id="dockerMsg" class="dim"></span></div>';
     el('cmdText').textContent = installCmd(r.name, r.token);

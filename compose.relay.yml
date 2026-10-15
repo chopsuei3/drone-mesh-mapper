@@ -1,18 +1,19 @@
-# flightlog relay: a XIAO at another site, forwarded to the flightlog server.
-# Built on this machine from this checkout. Add the node on the server's Nodes
-# page first; it shows the token once, and the commands below. Then, on the
-# machine this XIAO is plugged into:
+# flightlog relay: a XIAO at another site, forwarded to the flightlog server,
+# from the prebuilt image (ghcr.io/chopsuei3/drone-mesh-mapper). Add the node on
+# the server's Nodes page first; it shows the token once, and these commands
+# with everything filled in. On the machine this XIAO is plugged into:
 #
-#   git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
-#   cd ~/drone-mesh-mapper
+#   mkdir -p ~/flightlog-relay && cd ~/flightlog-relay
+#   curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/compose.relay.yml
 #
-# and in a file named .env beside this one (chmod 600 .env - it holds the token):
+# and in a file named .env beside it (chmod 600 .env - it holds the token):
 #
 #   FLIGHTLOG_SERVER=http://fl-host.local:5001
 #   FLIGHTLOG_TOKEN=flr_...
 #   FLIGHTLOG_NODE=north
 #   # FLIGHTLOG_PORTS=/dev/ttyACM0     # default: auto, every Espressif USB device
 #   # FLIGHTLOG_HEARTBEAT=60           # default 10 s; raise it on a metered link
+#   # FLIGHTLOG_IMAGE=flightlog:local  # an image you built: docker build -t flightlog:local .
 #   # COMPOSE_PROFILES=tailscale       # reach the server over Tailscale; see below
 #   # TS_AUTHKEY=tskey-auth-...
 #
@@ -20,15 +21,13 @@
 #
 #   data/    flightlog_relay.db - the spool; every line stays there until the server has it
 #
-# Update: git pull && docker compose -f compose.relay.yml up -d
+# Update: docker compose -f compose.relay.yml pull && docker compose -f compose.relay.yml up -d
 # Status: docker exec flightlog-relay python -m flightlog.relay --status
 # Logs:   docker logs -f flightlog-relay
 name: flightlog-relay
 services:
   relay:
-    image: flightlog:local
-    build: .
-    pull_policy: never           # built here, never fetched from a registry
+    image: ${FLIGHTLOG_IMAGE:-ghcr.io/chopsuei3/drone-mesh-mapper:latest}
     container_name: flightlog-relay
     command: ["relay"]
     # The Nodes page shows this machine's own hostname, not a container id.

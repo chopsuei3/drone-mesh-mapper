@@ -1,28 +1,28 @@
-# flightlog server, built on this machine from this checkout. On the machine the
-# XIAO is plugged into:
+# flightlog server, from the prebuilt image (ghcr.io/chopsuei3/drone-mesh-mapper).
+# On the machine the XIAO is plugged into - no clone needed:
 #
-#   git clone --depth 1 --branch city-wide-tracking https://github.com/chopsuei3/drone-mesh-mapper.git ~/drone-mesh-mapper
-#   cd ~/drone-mesh-mapper
+#   mkdir -p ~/flightlog && cd ~/flightlog
+#   curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/compose.yml
 #   docker compose up -d
 #
+# (In a clone of the repo, `docker compose up -d` there works the same way.)
 # Then open http://<this-machine>:5001/sources and tick the XIAO's port.
 #
 #   data/    flightlog.db, flightlog_ports.json, flightlog_serial.log
-#   tiles/   offline .mbtiles basemaps (the same directory mesh-mapper.py uses)
+#   tiles/   offline .mbtiles basemaps
 #
-# Update: git pull && docker compose up -d      (every `up` rebuilds; unchanged parts come from cache)
+# Update: docker compose pull && docker compose up -d
 # Logs:   docker logs -f flightlog
 #
 # Optional settings go in a file named .env beside this one:
 #   FLIGHTLOG_PORT=5001
+#   FLIGHTLOG_IMAGE=flightlog:local  # an image you built: docker build -t flightlog:local .
 #   COMPOSE_PROFILES=tailscale      # also join a tailnet; see the tailscale service below
 #   TS_AUTHKEY=tskey-auth-...
 name: flightlog
 services:
   flightlog:
-    image: flightlog:local
-    build: .
-    pull_policy: never           # built here, never fetched from a registry
+    image: ${FLIGHTLOG_IMAGE:-ghcr.io/chopsuei3/drone-mesh-mapper:latest}
     container_name: flightlog
     # Extra flightlog flags go after "server", e.g. ["server", "--retention-days", "90"]
     command: ["server"]

@@ -1,9 +1,9 @@
 # flightlog server and relay in one image - the entrypoint picks the role.
-# Built on each machine from its checkout:
+# .github/workflows/container.yml publishes it as ghcr.io/chopsuei3/drone-mesh-mapper,
+# which compose.yml (server) and compose.relay.yml (relay) run. To build it
+# yourself instead:
 #
-#   docker compose up -d                              # server on :5001 (compose.yml)
-#   docker compose -f compose.relay.yml up -d         # a remote site's relay
-#   docker build -t flightlog:local .                 # just the image
+#   docker build -t flightlog:local .        # then FLIGHTLOG_IMAGE=flightlog:local in .env
 #
 # Everything that changes at runtime lives in /data (bind-mount it): the
 # database, the selected ports, the raw serial log, and the relay's config and
