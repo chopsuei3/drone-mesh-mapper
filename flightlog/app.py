@@ -195,8 +195,12 @@ def create_app(db_path=None, gap_s=DEFAULT_GAP_S, live=True, serial_enabled=True
     serial_mgr = None
     if serial_enabled:
         try:
+            # The port selection lives beside the database, like the serial log,
+            # so a --db elsewhere (a container's /data) keeps all the state together.
             serial_mgr = SerialManager(
                 sess, rawlog=rawlog,
+                state_path=(os.path.join(os.path.dirname(db.path), 'flightlog_ports.json')
+                            if db.path != ':memory:' else None),
                 source_for=lambda port: '%s/%s' % (nodes.name(home_id), short_port(port)),
                 on_line=lambda port, line, ts, det: nodes.line_seen(
                     home_id, port, ts, line, 'detection' if det is not None
@@ -809,7 +813,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description='flightlog - flight-first RemoteID logger')
     ap.add_argument('--web-port', type=int, default=5001)
     ap.add_argument('--host', default='127.0.0.1')
-    ap.add_argument('--db', default=None)
+    ap.add_argument('--db', default=os.environ.get('FLIGHTLOG_DB'),
+                    help='database file (default: $FLIGHTLOG_DB, else flightlog.db in the repo)')
     ap.add_argument('--gap', type=float, default=DEFAULT_GAP_S)
     ap.add_argument('--resume-window', type=float, default=DEFAULT_RESUME_S,
                     help='continue a flight whose drone reappears within this many '

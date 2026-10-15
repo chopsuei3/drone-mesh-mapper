@@ -453,7 +453,7 @@ def _ago(s):
 
 def print_status(cfg, spool_path):
     """What the running relay last recorded, plus a fresh look at ports and server."""
-    print('relay config:   %s' % (cfg.get('_path') or '(command line)'))
+    print('relay config:   %s' % (cfg.get('_path') or '(command line / environment)'))
     print('server:         %s' % (cfg.get('server') or '(not set)'))
     print('node name:      %s' % (cfg.get('name') or '(not set)'))
     if os.path.exists(spool_path):
@@ -522,16 +522,27 @@ def load_config(path):
 
 
 def main(argv=None):
+    # Each option can also come from the environment (a container's .env), so the
+    # token need not sit on the command line. The command line wins, then the
+    # environment, then the config file. Empty counts as unset: compose passes
+    # an optional variable left out of .env as ''.
+    env = lambda key, default=None: os.environ.get(key) or default
     ap = argparse.ArgumentParser(description='flightlog relay: forward a remote XIAO to the server')
-    ap.add_argument('--config', default=CONFIG_NAME,
+    ap.add_argument('--config', default=env('FLIGHTLOG_RELAY_CONFIG', CONFIG_NAME),
                     help='JSON config written by RPI/install_relay.py (default: ./%s)' % CONFIG_NAME)
-    ap.add_argument('--server', help='e.g. http://homepi:5001 (its Tailscale name)')
-    ap.add_argument('--token', help='the token the Nodes page showed for this node')
-    ap.add_argument('--name', help='this node\'s name (informational)')
-    ap.add_argument('--ports', help='"auto" (Espressif USB devices) or a comma-separated list')
-    ap.add_argument('--spool', help='spool file (default: %s beside the config)' % SPOOL_NAME)
-    ap.add_argument('--heartbeat', type=float, dest='heartbeat_s',
-                    help='seconds between check-ins while nothing is heard (default %d)' % HEARTBEAT_S)
+    ap.add_argument('--server', default=env('FLIGHTLOG_SERVER'),
+                    help='e.g. http://homepi:5001 (its Tailscale name) [$FLIGHTLOG_SERVER]')
+    ap.add_argument('--token', default=env('FLIGHTLOG_TOKEN'),
+                    help='the token the Nodes page showed for this node [$FLIGHTLOG_TOKEN]')
+    ap.add_argument('--name', default=env('FLIGHTLOG_NODE'),
+                    help='this node\'s name (informational) [$FLIGHTLOG_NODE]')
+    ap.add_argument('--ports', default=env('FLIGHTLOG_PORTS'),
+                    help='"auto" (Espressif USB devices) or a comma-separated list [$FLIGHTLOG_PORTS]')
+    ap.add_argument('--spool', default=env('FLIGHTLOG_SPOOL'),
+                    help='spool file (default: %s beside the config) [$FLIGHTLOG_SPOOL]' % SPOOL_NAME)
+    ap.add_argument('--heartbeat', type=float, dest='heartbeat_s', default=env('FLIGHTLOG_HEARTBEAT'),
+                    help='seconds between check-ins while nothing is heard (default %d)'
+                         ' [$FLIGHTLOG_HEARTBEAT]' % HEARTBEAT_S)
     ap.add_argument('--status', action='store_true', help='print spool, ports and server state')
     ap.add_argument('--replay', metavar='FILE', help='feed a capture instead of serial ports')
     ap.add_argument('--speed', type=float, default=1.0, help='replay speed-up factor')

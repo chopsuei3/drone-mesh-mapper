@@ -95,8 +95,13 @@ def replay(db, gap_s=DEFAULT_GAP_S, resume_s=DEFAULT_RESUME_S):
     return n
 
 
-def import_state(db):
-    """Apply aliases.json / drone_tags.json / faa_cache.csv onto drone records."""
+def import_state(db, state_dir=None):
+    """Apply aliases.json / drone_tags.json / faa_cache.csv onto drone records.
+
+    They are read from `state_dir`, by default the repo root where mesh-mapper.py
+    keeps them.
+    """
+    state_dir = state_dir or BASE_DIR
     out = {'labels': 0, 'tags': 0, 'faa': 0, 'stubs': 0}
 
     def drone_for(mac):
@@ -113,7 +118,7 @@ def import_state(db):
 
     for fname, col, key in (('aliases.json', 'label', 'labels'),
                             ('drone_tags.json', 'tag', 'tags')):
-        path = os.path.join(BASE_DIR, fname)
+        path = os.path.join(state_dir, fname)
         if not os.path.exists(path):
             continue
         try:
@@ -131,7 +136,7 @@ def import_state(db):
                 (value, did))
             out[key] += 1
 
-    faa = os.path.join(BASE_DIR, 'faa_cache.csv')
+    faa = os.path.join(state_dir, 'faa_cache.csv')
     if os.path.exists(faa):
         # The legacy cache is keyed (mac, remote_id) and appended without dedupe,
         # so later rows win. The registry is per serial, so it is re-keyed here.
@@ -149,12 +154,14 @@ def import_state(db):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--db', default=None)
+    ap.add_argument('--db', default=os.environ.get('FLIGHTLOG_DB'))
     ap.add_argument('--csv', default=os.path.join(BASE_DIR, 'cumulative_detections.csv'))
     ap.add_argument('--gap', type=float, default=DEFAULT_GAP_S)
     ap.add_argument('--resume-window', type=float, default=DEFAULT_RESUME_S)
     ap.add_argument('--force', action='store_true', help='import even if flights already exist')
     ap.add_argument('--skip-state', action='store_true')
+    ap.add_argument('--state-dir', default=BASE_DIR,
+                    help='where aliases.json, drone_tags.json and faa_cache.csv are (default: the repo)')
     args = ap.parse_args(argv)
 
     db = Database(args.db)
@@ -171,7 +178,7 @@ def main(argv=None):
     replayed = replay(db, args.gap, args.resume_window)
     db.execute("DROP TABLE IF EXISTS _import")
 
-    state = {} if args.skip_state else import_state(db)
+    state = {} if args.skip_state else import_state(db, args.state_dir)
     flights = db.one("SELECT COUNT(*) AS n FROM flights")['n']
     notrack = db.one("SELECT COUNT(*) AS n FROM flights WHERE gps_count=0")['n']
     drones = db.one("SELECT COUNT(*) AS n FROM drones")['n']
