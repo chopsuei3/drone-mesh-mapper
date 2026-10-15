@@ -126,6 +126,120 @@ sudo systemctl stop flightlog
 cd ~/mesh-mapper && python3 mesh-mapper.py
 ```
 
+## Docker
+
+One image runs both the server and the [relays](#more-receivers-relays-at-other-sites):
+`ghcr.io/chopsuei3/drone-mesh-mapper`. It is built for:
+
+- **amd64:** PCs.
+- **arm64:** 64-bit Pis and TV boxes such as the X96.
+- **armv7:** 32-bit Pis.
+
+A Pi 1 or Zero (armv6) is not covered; use the installer above. Nothing needs cloning: a compose
+file and two directories are the whole install.
+
+Install Docker once (log out and back in afterwards):
+
+```sh
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+```
+
+Then, on the machine the XIAO is plugged into:
+
+```sh
+mkdir -p ~/flightlog && cd ~/flightlog
+curl -fsSLO https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/docker/compose.yml
+docker compose up -d
+```
+
+Open `http://<host>:5001/sources`, tick the XIAO's port, and wait for `alive`, as without
+Docker. Everything the app writes lands beside the compose file:
+
+```
+~/flightlog/
+  compose.yml
+  data/       flightlog.db, flightlog_ports.json (the ticked ports), flightlog_serial.log
+  tiles/      offline .mbtiles basemaps: drop files in and refresh the page
+```
+
+```sh
+docker logs -f flightlog                         # what it is doing
+docker compose pull && docker compose up -d      # update to the newest image
+docker compose down                              # stop; data/ and tiles/ stay
+tail -f ~/flightlog/data/flightlog_serial.log    # raw serial output
+```
+
+Flags go after `server` in the compose file's `command:`, for example
+`["server", "--retention-days", "90"]`. For another port, set `FLIGHTLOG_PORT=5002` in a
+`.env` file beside `compose.yml`.
+
+Without compose, the same container:
+
+```sh
+docker run -d --name flightlog --restart unless-stopped --network host \
+  -v /dev:/dev --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw' \
+  -v ~/flightlog/data:/data -v ~/flightlog/tiles:/app/tiles -v /etc/localtime:/etc/localtime:ro \
+  ghcr.io/chopsuei3/drone-mesh-mapper:latest
+```
+
+### How the container is set up
+
+- **Host networking.** flightlog has the machine's own address, so relays reach it at
+  `http://fl-host.local:5001` as they would without Docker.
+- **Serial.** All of `/dev` is mounted, and the container may open serial devices only:
+  - The cgroup rules allow major 166 (ttyACM, the XIAO's own USB) and major 188 (ttyUSB, USB-serial
+    bridges).
+  - A XIAO that resets or is replugged and comes back as `ttyACM1` is found again, and the Sources
+    page lists ports as it would without Docker.
+  - ModemManager on the host still interferes; see [Troubleshooting](#troubleshooting).
+- **Local time.** `/etc/localtime` is mounted, because the Analysis page buckets flights by local
+  hour and a container otherwise runs on UTC. Setting `TZ: America/Chicago` under `environment:`
+  does the same.
+- **Root inside the container**, as in radiosonde_auto_rx's image. Serial devices and the mounted
+  directories then work on any distribution without matching group ids. There is still no login,
+  so keep it on your LAN.
+- **Logs** are capped at 3 × 10 MB, so request logs cannot fill an SD card.
+
+### Moving from the systemd service
+
+Stop the service, then copy the database, with its `-wal` and `-shm` files, and the port
+selection:
+
+```sh
+sudo systemctl disable --now flightlog
+mkdir -p ~/flightlog/data ~/flightlog/tiles
+cp ~/drone-mesh-mapper/flightlog.db* ~/drone-mesh-mapper/flightlog_ports.json ~/flightlog/data/
+cp ~/drone-mesh-mapper/tiles/*.mbtiles ~/flightlog/tiles/      # if you have any
+cd ~/flightlog && docker compose up -d
+```
+
+To import `mesh-mapper.py` history into a new install, put `cumulative_detections.csv` in
+`data/` before the first `up`. `aliases.json`, `drone_tags.json` and `faa_cache.csv` can go there
+too. Then:
+
+```sh
+docker compose run --rm flightlog migrate
+```
+
+### Where the image comes from
+
+`.github/workflows/container.yml` builds and publishes it on every push that touches the app.
+
+- `latest` is the newest build of `city-wide-tracking`.
+- Every build is also tagged `sha-<commit>`, so you can pin one.
+
+GitHub makes a new package **private**. Make it public once: on GitHub, open your profile, then
+*Packages → drone-mesh-mapper → Package settings → Change visibility → Public*. Otherwise every
+machine needs `docker login ghcr.io` first.
+
+To build it yourself instead, from a checkout:
+
+```sh
+docker build -t flightlog .
+cd docker && FLIGHTLOG_IMAGE=flightlog docker compose up -d     # data in docker/data
+```
+
 ## Feeding it
 
 Same wire format as before, so existing tooling works unchanged:
@@ -247,6 +361,66 @@ python3 -m flightlog.relay --status          # spool, last ack, ports, server ch
 sudo systemctl restart flightlog-relay       # after copying new files over
 python3 RPI/install_relay.py --uninstall     # keeps the config and the spool
 ```
+
+### Or: the relay in Docker
+
+On a machine with Docker (an X96 box, or any Pi except a Pi 1 or Zero), the relay needs no
+checkout and no Python. When you create a node, the Nodes page shows a `docker run` command under
+the install command, with the server address, token and name filled in. Run it on the remote
+machine:
+
+```sh
+docker run -d --name flightlog-relay --restart unless-stopped --network host \
+  -v /dev:/dev --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 188:* rmw' \
+  -v /run/avahi-daemon:/run/avahi-daemon -v ~/flightlog-relay:/data \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  -e FLIGHTLOG_SERVER=http://fl-host.local:5001 -e FLIGHTLOG_TOKEN=flr_... -e FLIGHTLOG_NODE=north \
+  ghcr.io/chopsuei3/drone-mesh-mapper:latest relay
+```
+
+With compose instead, the token stays in a file rather than your shell history:
+
+```sh
+mkdir -p ~/flightlog-relay && cd ~/flightlog-relay
+curl -fsSL -o compose.yml https://raw.githubusercontent.com/chopsuei3/drone-mesh-mapper/city-wide-tracking/docker/compose.relay.yml
+cat > .env <<'EOF'
+FLIGHTLOG_SERVER=http://fl-host.local:5001
+FLIGHTLOG_TOKEN=flr_...
+FLIGHTLOG_NODE=north
+EOF
+chmod 600 .env
+docker compose up -d
+```
+
+| Variable | Same as | |
+|---|---|---|
+| `FLIGHTLOG_SERVER` | `--server` | required |
+| `FLIGHTLOG_TOKEN` | `--token` | required |
+| `FLIGHTLOG_NODE` | `--name` | |
+| `FLIGHTLOG_PORTS` | `--ports` | default `auto` |
+| `FLIGHTLOG_HEARTBEAT` | `--heartbeat` | default 10 s |
+
+These variables work for `python3 -m flightlog.relay` without Docker too. A flag on the command
+line wins over the variable, and the variable wins over `flightlog_relay.json`.
+
+The spool, `flightlog_relay.db`, is in `~/flightlog-relay` (`data/` with compose). It survives
+restarts and updates, so the relay still loses nothing.
+
+Unlike the installer, the container does not check the token before starting; it keeps retrying.
+See what it is doing with:
+
+```sh
+docker exec flightlog-relay python -m flightlog.relay --status
+docker logs -f flightlog-relay
+```
+
+`.local` names resolve through the host's avahi-daemon, whose socket is mounted from
+`/run/avahi-daemon`. If `getent hosts fl-host.local` fails on the host itself, install it there
+(`sudo apt install avahi-daemon`) or use the server's IP address.
+
+To update: with compose, `docker compose pull && docker compose up -d`. With `docker run`, pull
+`ghcr.io/chopsuei3/drone-mesh-mapper:latest`, `docker rm -f flightlog-relay`, and run the
+command again.
 
 ### What the relay does
 
@@ -684,6 +858,13 @@ page.
   flight, a backlog only adds receptions; see *How several receivers count*.
 - **Dropped lines on the Nodes page.** The relay's spool overflowed: the link was down
   for over a day, or more than 200,000 lines piled up.
+- **In Docker, the port is listed but will not open (`Permission denied`).** The compose
+  file's `device_cgroup_rules` cover ttyACM and ttyUSB only. A board on another driver has
+  another major number: `ls -l /dev/ttyXXX` shows it as the first of the two numbers before
+  the date. Add a rule for it, or replace the rules with `privileged: true`.
+- **In Docker, a relay cannot reach `fl-host.local` but the host can.** The avahi socket is
+  not mounted. Check with `docker exec flightlog-relay getent hosts fl-host.local`; see
+  [the relay in Docker](#or-the-relay-in-docker).
 
 ## Not carried over
 
