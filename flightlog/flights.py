@@ -14,10 +14,13 @@ Several receivers. Detections carry `rx_node`, the receiver that heard them:
 the home Pi's own XIAO, or a relay at another site feeding /api/ingest. Three
 things follow from more than one receiver, handled below:
 
-  * Two nodes hear the same broadcast. Same drone, same position and altitude,
-    different RSSI - and the plain duplicate rule keys on RSSI, so both would
-    be kept. A reading another node already delivered is a *reception*: it is
-    counted in flight_nodes (who heard the flight, how well) and nowhere else.
+  * Two receivers hear the same broadcast. Same drone, same position and
+    altitude, different RSSI - and the plain duplicate rule keys on RSSI, so
+    both would be kept. A receiver is one XIAO: a node and its port, so two
+    XIAOs on one machine count as two receivers of one node. A reading another
+    node already delivered is a *reception*: it is counted in flight_nodes (who
+    heard the flight, how well) and nowhere else. A reading another XIAO of the
+    same node delivered only adds its RSSI to that node's reception.
   * Nodes deliver in batches, so two nodes' points arrive interleaved and
     slightly out of order. Drawn as they arrive, the path would zig-zag
     between the two streams. A fix older than the newest one applied is
@@ -91,14 +94,15 @@ PILOT_MATCH_M = 50.0
 # The dualcore firmware's WiFi callback decodes both NAN action frames and
 # beacon frames and queues every decode to the printer task with no dedupe, so
 # identical detections can arrive back-to-back (2 of 22 lines in that capture
-# were byte-identical). One matching the same node's previous detection in
+# were byte-identical). One matching the same receiver's previous detection in
 # position, altitude and RSSI within this window carries no information and is
 # dropped rather than inflating the point count.
 DUP_WINDOW_S = 1.0
 
-# The same position and altitude from a *different* node within this window is
-# one broadcast heard twice. Wider than DUP_WINDOW_S because the two copies are
-# stamped by different relays, each off by its own network delay.
+# The same position and altitude from a *different* receiver - another node, or
+# another XIAO on the same node - within this window is one broadcast heard
+# twice. Wider than DUP_WINDOW_S because the two copies are stamped by
+# different relays, each off by its own network delay.
 CROSS_DUP_WINDOW_S = 2.0
 # How far back (in detection time) those copies are looked for. A relay lagging
 # further than this behind another delivers presence rows instead.
@@ -175,8 +179,9 @@ class FlightState:
         self.fed_at = time.time()       # wall time a detection last arrived for it
         self.delayed = False            # fed by a relay (detections carry a delay)
         self.past = False               # built from a backlog, behind a live flight
-        self.last_keys = {}             # rx_node -> (position+rssi, ts): same-node duplicates
-        self.recent = {}                # (lat, lon, alt) -> (ts, rx_node): cross-node duplicates
+        # A receiver is (rx_node, source): one XIAO, so two on one node stay apart.
+        self.last_keys = {}             # receiver -> (position+rssi, ts): its own re-emits
+        self.recent = {}                # (lat, lon, alt) -> (ts, receiver): copies from others
         self.recent_q = collections.deque()
         self.sample_ts = {}             # rx_node -> ts of its last coverage sample
 
@@ -184,14 +189,16 @@ class FlightState:
         """Whether a detection at `ts` falls within this flight's span, give or take a gap."""
         return self.started_at - gap_s <= ts <= self.last_ts + gap_s
 
-    def copy_of(self, pos, ts, node):
-        """True if another node already delivered this reading. See CROSS_DUP_WINDOW_S."""
+    def copy_of(self, pos, ts, rx):
+        """The receiver that already delivered this reading, if another one did;
+        else None. See CROSS_DUP_WINDOW_S."""
         seen = self.recent.get(pos)
-        return (seen is not None and seen[1] != node
-                and abs(ts - seen[0]) <= CROSS_DUP_WINDOW_S)
+        if seen is not None and seen[1] != rx and abs(ts - seen[0]) <= CROSS_DUP_WINDOW_S:
+            return seen[1]
+        return None
 
-    def remember(self, pos, ts, node):
-        self.recent[pos] = (ts, node)
+    def remember(self, pos, ts, rx):
+        self.recent[pos] = (ts, rx)
         q = self.recent_q
         q.append((ts, pos))
         horizon = (self.max_ts if self.max_ts is not None else ts) - RECENT_KEYS_S
@@ -464,20 +471,24 @@ class Sessionizer:
         if det.get('delay') is not None:
             st.delayed = True
         pos = (det.get('lat'), det.get('lon'), det.get('alt'))
+        rx = (node, det.get('source'))
 
-        # The same node's identical re-emit; see DUP_WINDOW_S.
+        # The same receiver's identical re-emit; see DUP_WINDOW_S.
         key = pos + (det.get('rssi'),)
-        lk = st.last_keys.get(node)
+        lk = st.last_keys.get(rx)
         if lk is not None and lk[0] == key and abs(ts - lk[1]) < DUP_WINDOW_S:
             return st.flight_id
-        st.last_keys[node] = (key, ts)
+        st.last_keys[rx] = (key, ts)
 
-        self._reception(st.flight_id, det, ts, st)
-        if st.copy_of(pos, ts, node):
+        first = st.copy_of(pos, ts, rx)
+        # Another XIAO of the same node already counted this broadcast for it.
+        self._reception(st.flight_id, det, ts, st,
+                        count=first is None or first[0] != node)
+        if first is not None:
             if ts > st.last_ts:
                 st.last_ts = ts             # heard, so still alive - and nothing more
             return st.flight_id
-        st.remember(pos, ts, node)
+        st.remember(pos, ts, rx)
 
         speed, heading, applied = st.add(det, ts)
         self._pending.append((
@@ -501,10 +512,11 @@ class Sessionizer:
                 'speed_ms': speed, 'heading_deg': heading})
         return st.flight_id
 
-    def _reception(self, fid, det, ts, st=None):
+    def _reception(self, fid, det, ts, st=None, count=True):
         """Count one reception by det['rx_node'] towards flight_nodes, and keep
         a coverage sample now and then. `st` is the flight's state when it is
-        in memory."""
+        in memory. With count=False - the node's other XIAO heard the same
+        broadcast - only its RSSI and time are taken."""
         node = det.get('rx_node')
         if node is None:
             return
@@ -513,7 +525,7 @@ class Sessionizer:
         if r is None:
             self._rx[(fid, node)] = [1, rssi, rssi, ts, ts]
         else:
-            r[0] += 1
+            r[0] += 1 if count else 0
             r[1], r[2] = _hi(r[1], rssi), _lo(r[2], rssi)
             r[3], r[4] = min(r[3], ts), max(r[4], ts)
         lat, lon = det.get('lat'), det.get('lon')

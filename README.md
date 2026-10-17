@@ -125,6 +125,8 @@ variants are unchanged from upstream.
 - **flightlog**: city-wide tracking — remote relays (`python -m flightlog.relay`,
   `RPI/install_relay.py`), the Nodes page, heard-by and coverage, and node alerts. The design
   is in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md).
+- **flightlog**: two XIAOs on one machine - both ports ticked on the server, or both on a relay
+  - count each broadcast once, like two nodes do.
 - **flightlog**: Docker. One multi-arch image for the server and the relays, published to
   `ghcr.io/chopsuei3/drone-mesh-mapper` by GitHub Actions. It comes with:
   - compose files for both roles;

@@ -479,9 +479,14 @@ a relay offline after 10 minutes without contact.
 
 - **One broadcast heard by two nodes is one point.** The same position and altitude
   from a second node within 2 s counts as a *reception*: the node is listed among those
-  that heard the flight, but adds no point, distance or speed. A node's own
+  that heard the flight, but adds no point, distance or speed. A XIAO's own
   back-to-back duplicates are still dropped by the rule above, which keys on RSSI, so a
   hovering drone still logs every second.
+- **Two XIAOs on one machine work the same way.** Tick both ports on the Sources page
+  of the server, or let a relay take both (`--ports auto` does). A broadcast both hear
+  is one point and one reception for that node, and the node keeps the better of the
+  two RSSIs. The node's status covers both XIAOs, so it stays *online* while either
+  talks. The Sources page and the raw view still show each port separately.
 - **Points that arrive out of order count as presence.** Nodes send in batches, so
   their points interleave late. A fix more than half a second older than the newest one
   on the path keeps the flight alive and is stored. It does not move the path, speed,
