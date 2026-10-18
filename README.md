@@ -63,7 +63,8 @@ flightlog serves on port 5001 and has **no login** — run it on your LAN or a p
 
 ### Firmware — `remoteid-mesh-dualcore`
 
-The XIAO ESP32-S3 dualcore build is reworked. Its output stays compatible with
+The XIAO ESP32-S3 dualcore build is reworked, and the same source now also builds for the
+XIAO ESP32-C5, which hears 5 GHz Wi-Fi too, and the C6. Its output stays compatible with
 `mesh-mapper.py`.
 
 - **Crash fixes** inherited from upstream: a NULL-pointer write on the first Wi-Fi NAN Remote ID
@@ -79,7 +80,19 @@ The XIAO ESP32-S3 dualcore build is reworked. Its output stays compatible with
   video-link DroneID needs a software-defined radio.
 - **Every detection says how it was heard** (`band`, `channel`), and a once-a-minute status line
   carries radio counters and the reason for the last restart — `"reset":"panic"` or a watchdog
-  value means the board crashed.
+  value means the board crashed. The first status line comes 5 s after boot, and writing
+  `STATUS` to the port prints one at once.
+- **XIAO ESP32-C5, 2.4 and 5 GHz** (`-e seeed_xiao_esp32c5`).
+  - **Hopping:** each round visits channel 6, the next 2.4 GHz channel, 149 (the 5 GHz NAN
+    channel) and the next of 153–165. Build with `-DHOP_5G_UNII1` to add 36–48.
+  - **Output:** 5 GHz detections say `"band":"5GHz"`.
+  - **Diagnostics:** the status line adds `wifi5_frames`, `chan_fail` (channels the radio
+    refused) and `radio` (whether the 5 GHz setup worked).
+  - **Country:** the build sets the Wi-Fi country to `US` (`HOP_COUNTRY` in `platformio.ini`),
+    because it decides which 5 GHz channels the radio may tune to. Change it to yours.
+- **One wiring for every XIAO**: the mesh relay UART is D4 (TX) and D5 (RX) on the S3, C6
+  and C5 alike, and the single-core C6 and C5 no longer pin tasks to a second core they
+  don't have.
 
 Build and flash it with PlatformIO, as described under [Firmware](#firmware). The other firmware
 variants are unchanged from upstream.
@@ -89,6 +102,10 @@ variants are unchanged from upstream.
 - The **Web Flasher and the prebuilt binaries in `firmware/` are upstream's**. They do not
   include the firmware changes above; build `remoteid-mesh-dualcore` from source.
 - **`node-mode-dualcore`** still has the Wi-Fi NAN crash fixed above in the dualcore build.
+- **`remoteid-c5-5g`** is upstream's C5 build, unchanged. It has none of the fixes above,
+  and at 2.4 GHz it only listens on channel 6. For a C5, build `remoteid-mesh-dualcore`
+  with `-e seeed_xiao_esp32c5`.
+- The **C5 build has only been compiled** so far, not yet run on a board.
 - flightlog has **no authentication** (see above).
 
 ### Planned
@@ -110,6 +127,8 @@ in [docs/plans/city-wide-tracking.md](docs/plans/city-wide-tracking.md); it is n
 - **Firmware**: the crash and dropped-detection fixes, and DJI DroneID — with flightlog support
   for DJI drones (their home point is labelled as such, and they are never sent to the FAA
   lookup).
+- **Firmware**: the XIAO ESP32-C5 as a build of the dualcore firmware, hopping 2.4 and 5 GHz;
+  the status line on request (`STATUS`) and 5 s after boot.
 
 ---
 
@@ -215,18 +234,21 @@ Pick the variant that matches your board. All build with PlatformIO:
 | Path | Target | Notes |
 |---|---|---|
 | `node-mode-dualcore/` | ESP32-S3 dual-core | Remote node + home dedup node (`pio run -e remote` / `-e home`). Still has the Wi-Fi NAN crash. |
-| `remoteid-mesh-dualcore/` | ESP32-S3 | BLE + WiFi concurrent detection, mesh relay. **Reworked in this fork** — crash fixes, channel hopping, DJI DroneID. Use this with flightlog. |
+| `remoteid-mesh-dualcore/` | ESP32-S3, ESP32-C5, ESP32-C6 | BLE + WiFi concurrent detection, mesh relay. **Reworked in this fork** — crash fixes, channel hopping, DJI DroneID; on the C5, 2.4 and 5 GHz. Use this with flightlog. |
 | `remoteid-mesh/` | ESP32-S3 / single-core | Original variant, GPIO6/7 pinout |
-| `remoteid-c5-5g/` | ESP32-C5 | UNII-3 5GHz WiFi RID (channels 149/153/157/161/165) |
+| `remoteid-c5-5g/` | ESP32-C5 | Upstream's C5 build, unchanged: UNII-3 5GHz (149–165) but only channel 6 at 2.4 GHz, and none of the fixes. For a C5, use `remoteid-mesh-dualcore` with `-e seeed_xiao_esp32c5`. |
 
 ```bash
 cd remoteid-mesh-dualcore
-pio run -e seeed_xiao_esp32s3 -t upload
+pio run -e seeed_xiao_esp32s3 -t upload      # XIAO ESP32-S3
+pio run -e seeed_xiao_esp32c5 -t upload      # XIAO ESP32-C5 (2.4 + 5 GHz)
 ```
 
-Name the environment: `remoteid-mesh-dualcore/platformio.ini` also defines a C6 target, and a
-bare `pio run -t upload` builds and uploads both. In VS Code, pick
-`env:seeed_xiao_esp32s3` → **Upload** in the PlatformIO sidebar.
+Name the environment: `remoteid-mesh-dualcore/platformio.ini` defines S3, C5 and C6 targets,
+and a bare `pio run -t upload` builds and uploads all three. In VS Code, pick the board's env
+(`env:seeed_xiao_esp32s3`, `env:seeed_xiao_esp32c5`) → **Upload** in the PlatformIO sidebar.
+The XIAO C5 has no board definition in the platform yet. The project brings its own, in
+`remoteid-mesh-dualcore/boards/`.
 
 ---
 
@@ -565,7 +587,7 @@ Pushed to connected clients in real time:
 ### Supported ESP32 Boards
 - **Xiao ESP32-S3** - Dual core, WiFi + BLE (recommended)
 - **Xiao ESP32-C3** - Single core, WiFi only
-- **Xiao ESP32-C5** - UNII-3 5GHz support
+- **Xiao ESP32-C5** - 2.4 + 5 GHz Wi-Fi and BLE (`remoteid-mesh-dualcore`, `-e seeed_xiao_esp32c5`)
 - **ESP32-DevKit** - Development & testing
 - **Custom PCBs** - available at [colonelpanic.tech](https://colonelpanic.tech)
 
@@ -667,9 +689,9 @@ drone-mesh-mapper/
 |   `-- cache_tiles.py          # CLI tile pre-cacher
 |-- RPI/                        # Raspberry Pi installers (install_rpi.py, install_flightlog.py)
 |-- node-mode-dualcore/         # ESP32-S3 dual-role firmware
-|-- remoteid-mesh-dualcore/     # ESP32-S3 BLE+WiFi firmware (reworked in this fork)
+|-- remoteid-mesh-dualcore/     # ESP32-S3/C5/C6 BLE+WiFi firmware (reworked in this fork; C5 adds 5 GHz)
 |-- remoteid-mesh/              # Single-core mesh firmware
-|-- remoteid-c5-5g/             # ESP32-C5 5GHz firmware
+|-- remoteid-c5-5g/             # upstream's ESP32-C5 build (use remoteid-mesh-dualcore instead)
 `-- firmware/                   # Additional firmware variants
 ```
 
