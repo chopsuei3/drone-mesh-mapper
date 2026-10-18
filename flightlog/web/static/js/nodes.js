@@ -99,7 +99,12 @@
       if (x.booted_at) bits.push('up ' + dur(now - x.booted_at));
       else if (x.uptime_s != null && x.t) bits.push('up ' + dur(x.uptime_s + now - x.t));
       if (x.queue_drops) bits.push('<span class="warnline">' + esc(x.queue_drops) + ' queue drops</span>');
-      var counters = [['wifi_frames', 'wifi'], ['ble_adv', 'ble'], ['odid_wifi', 'odid wifi'],
+      // A channel the radio refused, or a radio setup step that failed, means
+      // part of a band is not being heard (e.g. 5 GHz on a C5).
+      if (x.chan_fail) bits.push('<span class="warnline">' + esc(x.chan_fail) + ' channels refused</span>');
+      if (x.radio && x.radio !== 'ok') bits.push('<span class="warnline">radio ' + esc(x.radio) + '</span>');
+      var counters = [['chip', 'chip'], ['wifi_frames', 'wifi'], ['wifi5_frames', 'of them 5 GHz'],
+                      ['ble_adv', 'ble'], ['odid_wifi', 'odid wifi'],
                       ['odid_ble', 'odid ble'], ['dji', 'dji'], ['emitted', 'sent'],
                       ['heap', 'heap'], ['channel', 'ch']]
         .filter(function (c) { return x[c[0]] != null; })

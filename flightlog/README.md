@@ -524,9 +524,11 @@ Select a node to:
 - rotate its token, or delete it;
 - open its raw serial output.
 
-**Commands get no answer from the dualcore XIAO.** Its firmware does not read serial
-input: a command reaches its port (it shows as `TX>` in the raw view) and nothing comes
-back. Node-mode home firmware answers STATUS.
+**STATUS gets the XIAO's status line back.** The dualcore firmware (S3, C5, C6) answers
+STATUS with its status line at once, and reads WATCHDOG_RESET without replying.
+Node-mode home firmware answers STATUS too. A XIAO still running an older dualcore build
+does not read serial input: the command shows as `TX>` in the raw view and nothing comes
+back until the board is reflashed.
 
 ### Heard by and coverage
 

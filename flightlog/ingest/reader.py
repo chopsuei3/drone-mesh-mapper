@@ -299,8 +299,8 @@ class SerialReader:
 
     def send(self, port, command):
         """Write one line to a device. False when the port is not open or the
-        write failed. Only node-mode home firmware parses anything it is sent
-        (WATCHDOG_RESET, STATUS); the dualcore build ignores serial input."""
+        write failed. The dualcore build answers STATUS and ignores the rest;
+        node-mode home firmware parses both (WATCHDOG_RESET, STATUS)."""
         with self._lock:
             ser = self._sers.get(port)
         if ser is None or not ser.is_open:
