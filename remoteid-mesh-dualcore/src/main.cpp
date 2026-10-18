@@ -18,42 +18,90 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <soc/soc_caps.h>
 #include <atomic>
 
-const int SERIAL1_RX_PIN = 6;
-const int SERIAL1_TX_PIN = 5;
+// One source for every XIAO this repo flashes with it: the ESP32-S3 (dual
+// core), the C6 and the C5 (single core; the C5 also hears 5 GHz Wi-Fi).
+
+// The Meshtastic relay UART is D4 (TX) and D5 (RX) on every XIAO - GPIO5/6 on
+// the S3, 22/23 on the C6, 23/24 on the C5 - so the wiring is the same.
+const int SERIAL1_TX_PIN = D4;
+const int SERIAL1_RX_PIN = D5;
+
+// Tasks pin to a core on the dual-core S3; single-core chips have only core 0.
+#if CONFIG_FREERTOS_UNICORE
+  #define TASK_CORE(n) tskNO_AFFINITY
+#else
+  #define TASK_CORE(n) (n)
+#endif
 
 // ---------------------------------------------------------------------------
 // Wi-Fi channel hopping
 //
 // Remote ID reaches us two ways over Wi-Fi, and they want opposite things:
 //
-//   * NAN action frames always ride the NAN social channel, 6.
+//   * NAN action frames ride a NAN discovery channel: 6 at 2.4 GHz, and 149
+//     at 5 GHz.
 //   * Beacon-borne Remote ID (and DJI's own DroneID beacons) follow the
 //     aircraft's link channel, which can be any of them.
 //
 // So alternate: channel 6, one other, channel 6, the next other... which keeps
-// roughly half the dwell on 6 while still sweeping the band.
+// a good share of the dwell on 6 while still sweeping the band. A chip that
+// also hears 5 GHz (the C5) adds 149 and the next other 5 GHz channel to each
+// round: 6, a 2.4 GHz other, 149, a 5 GHz other.
 //
 // 1-11 only: the default Wi-Fi country policy rejects 12-14, so setting them
-// would silently fail. Add them here if your regulatory domain allows.
+// would fail. Add them here if your regulatory domain allows. At 5 GHz the
+// default is UNII-3 (149-165), where 5.8 GHz drone links and their beacons
+// live; build with -DHOP_5G_UNII1 to sweep 36-48 too (more common outside the
+// US). DFS channels (52-144) are left out. Every dwell can be overridden with
+// a -D build flag.
 // ---------------------------------------------------------------------------
 #define CHANNEL_HOME 6
 static const uint8_t channels_24[] = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
 #define NUM_24_CHANNELS (sizeof(channels_24) / sizeof(channels_24[0]))
+#ifndef HOP_DWELL_HOME_MS
 #define HOP_DWELL_HOME_MS  150
+#endif
+#ifndef HOP_DWELL_OTHER_MS
 #define HOP_DWELL_OTHER_MS 100
+#endif
+
+#if SOC_WIFI_SUPPORT_5G
+  #define DUAL_BAND 1
+  #define CHANNEL_HOME_5 149
+  static const uint8_t channels_5[] = {
+    153, 157, 161, 165,
+  #ifdef HOP_5G_UNII1
+    36, 40, 44, 48,
+  #endif
+  };
+  #define NUM_5_CHANNELS (sizeof(channels_5) / sizeof(channels_5[0]))
+  #ifndef HOP_DWELL_HOME5_MS
+  #define HOP_DWELL_HOME5_MS 100
+  #endif
+#else
+  #define DUAL_BAND 0
+#endif
 
 // One byte, one writer (the hop task), read by the Wi-Fi callback and the
-// status line. A volatile byte is atomic on this core, so no lock is needed.
+// status line. A volatile byte is atomic on these cores, so no lock is needed.
+// The radio's own per-frame channel field is 4 bits wide, too narrow for 149,
+// so the hop task's record is what a detection reports.
 volatile uint8_t current_channel = CHANNEL_HOME;
 
-enum RadioBand : uint8_t { BAND_2_4GHZ, BAND_BLE };
+enum RadioBand : uint8_t { BAND_2_4GHZ, BAND_5GHZ, BAND_BLE };
 enum IdType    : uint8_t { ID_ODID, ID_DJI };
+
+static inline RadioBand bandOf(uint8_t channel) {
+  return channel > 14 ? BAND_5GHZ : BAND_2_4GHZ;
+}
 
 const char* bandToString(RadioBand band) {
   switch (band) {
     case BAND_2_4GHZ: return "2.4GHz";
+    case BAND_5GHZ:   return "5GHz";
     case BAND_BLE:    return "BLE";
     default:          return "unknown";
   }
@@ -113,6 +161,16 @@ std::atomic<uint32_t> stat_odid_ble(0);
 std::atomic<uint32_t> stat_dji(0);
 std::atomic<uint32_t> stat_emitted(0);
 std::atomic<uint32_t> stat_queue_drops(0);
+// A channel the radio refused (esp_wifi_set_channel failed): on a C5, 5 GHz
+// channels the country setting does not allow. Without this count a refused
+// band would just look like a quiet one.
+std::atomic<uint32_t> stat_chan_fail(0);
+#if DUAL_BAND
+std::atomic<uint32_t> stat_wifi5_frames(0);   // the share of wifi_frames heard at 5 GHz
+#endif
+// What the radio setup reported, for the status line: "ok", or the step that
+// failed (the node keeps running on whatever the radio accepted).
+static const char *radio_setup = "ok";
 
 // MUST be called inside uav_mux. Finds this MAC's slot, else a free one, else
 // recycles the least recently seen - Remote ID MACs rotate, so stale entries
@@ -258,7 +316,7 @@ static void publish_pack(const uint8_t *src_mac, int rssi, uint8_t channel, uint
   memset(&u, 0, sizeof(u));
   memcpy(u.mac, src_mac, 6);
   u.rssi = rssi;
-  u.band = BAND_2_4GHZ;
+  u.band = bandOf(channel);
   u.channel = channel;
   u.id_type = ID_ODID;
   uint8_t fields = 0;
@@ -293,7 +351,7 @@ static void publish_dji(const uint8_t *src_mac, int rssi, uint8_t channel,
   memset(&u, 0, sizeof(u));
   memcpy(u.mac, src_mac, 6);
   u.rssi = rssi;
-  u.band = BAND_2_4GHZ;
+  u.band = bandOf(channel);
   u.channel = channel;
   u.id_type = ID_DJI;
   // Position always: 0/0 is DJI's "no fix", and the host treats it as such.
@@ -316,6 +374,9 @@ static void publish_dji(const uint8_t *src_mac, int rssi, uint8_t channel,
 void callback(void *buffer, wifi_promiscuous_pkt_type_t type) {
   if (type != WIFI_PKT_MGMT) return;
   stat_wifi_frames++;
+#if DUAL_BAND
+  if (current_channel > 14) stat_wifi5_frames++;
+#endif
 
   const wifi_promiscuous_pkt_t *packet = (const wifi_promiscuous_pkt_t *)buffer;
   uint8_t *payload = (uint8_t *)packet->payload;
@@ -490,32 +551,71 @@ static const char *reset_reason_str(esp_reset_reason_t r) {
 // Valid JSON carrying the counters that tell a wedged node from a quiet sky.
 // "reset" says why the node last restarted: "panic" or a watchdog means it
 // crashed. The host drops the line for having no "mac" and dims it for saying
-// "heartbeat".
+// "heartbeat". "chip" names the board's chip; a C5 also reports how many of
+// wifi_frames it heard at 5 GHz, and "chan_fail" counts channels the radio
+// refused - nonzero on a C5 means part of a band is not being heard.
 static void print_status(uint32_t now) {
-  char line[400];
+  char line[480];
   snprintf(line, sizeof(line),
-    "{\"heartbeat\":\"dualcore active\",\"uptime_s\":%lu,\"reset\":\"%s\","
-    "\"heap\":%lu,\"min_heap\":%lu,\"wifi_frames\":%lu,\"ble_adv\":%lu,"
-    "\"odid_wifi\":%lu,\"odid_ble\":%lu,\"dji\":%lu,\"emitted\":%lu,"
-    "\"queue_drops\":%lu,\"channel\":%u}",
-    (unsigned long)(now / 1000UL), boot_reason,
+    "{\"heartbeat\":\"dualcore active\",\"chip\":\"%s\",\"uptime_s\":%lu,\"reset\":\"%s\","
+    "\"heap\":%lu,\"min_heap\":%lu,\"wifi_frames\":%lu,"
+#if DUAL_BAND
+    "\"wifi5_frames\":%lu,"
+#endif
+    "\"ble_adv\":%lu,\"odid_wifi\":%lu,\"odid_ble\":%lu,\"dji\":%lu,\"emitted\":%lu,"
+    "\"queue_drops\":%lu,\"chan_fail\":%lu,\"radio\":\"%s\",\"channel\":%u}",
+    CONFIG_IDF_TARGET, (unsigned long)(now / 1000UL), boot_reason,
     (unsigned long) ESP.getFreeHeap(), (unsigned long) ESP.getMinFreeHeap(),
-    (unsigned long) stat_wifi_frames, (unsigned long) stat_ble_adv,
-    (unsigned long) stat_odid_wifi, (unsigned long) stat_odid_ble,
-    (unsigned long) stat_dji, (unsigned long) stat_emitted,
-    (unsigned long) stat_queue_drops, (unsigned) current_channel);
+    (unsigned long) stat_wifi_frames,
+#if DUAL_BAND
+    (unsigned long) stat_wifi5_frames,
+#endif
+    (unsigned long) stat_ble_adv, (unsigned long) stat_odid_wifi,
+    (unsigned long) stat_odid_ble, (unsigned long) stat_dji, (unsigned long) stat_emitted,
+    (unsigned long) stat_queue_drops, (unsigned long) stat_chan_fail, radio_setup,
+    (unsigned) current_channel);
   Serial.println(line);
+}
+
+// Commands the host writes to the port, one per line. STATUS prints the status
+// line now, so flightlog's Nodes page gets an answer instead of waiting up to a
+// minute; anything else (WATCHDOG_RESET, which flightlog sends on connect) is
+// read and ignored. Read here, in the printer task, because the reply is a
+// line on Serial and this task is its only writer.
+static void read_commands(uint32_t now) {
+  static char cmd[24];
+  static size_t n = 0;
+  static bool overlong = false;   // swallow the rest of a line too long to be a command
+  while (Serial.available() > 0) {
+    int c = Serial.read();
+    if (c < 0) break;
+    if (c == '\n' || c == '\r') {
+      cmd[n] = '\0';
+      if (!overlong && n > 0 && strcmp(cmd, "STATUS") == 0) print_status(now);
+      n = 0;
+      overlong = false;
+    } else if (overlong) {
+      continue;
+    } else if (n + 1 < sizeof(cmd)) {
+      cmd[n++] = (char)c;
+    } else {
+      overlong = true;
+    }
+  }
 }
 
 void printerTask(void *param) {
   id_data UAV;
-  uint32_t last_status = millis();
+  // The first status line 5 s after boot, so a freshly flashed board shows at
+  // once what its radios hear; then once a minute.
+  uint32_t last_status = millis() - 55000UL;
   for (;;) {
-    if (xQueueReceive(printQueue, &UAV, pdMS_TO_TICKS(1000)) == pdTRUE) {
+    if (xQueueReceive(printQueue, &UAV, pdMS_TO_TICKS(250)) == pdTRUE) {
       send_json_fast(&UAV);
       print_compact_message(&UAV);
     }
     uint32_t now = millis();
+    read_commands(now);
     if (now - last_status >= 60000UL) {
       last_status = now;
       print_status(now);
@@ -523,17 +623,26 @@ void printerTask(void *param) {
   }
 }
 
-void channelHopTask(void *parameter) {
-  size_t idx = 0;
-  for (;;) {
-    current_channel = CHANNEL_HOME;
-    esp_wifi_set_channel(CHANNEL_HOME, WIFI_SECOND_CHAN_NONE);
-    vTaskDelay(pdMS_TO_TICKS(HOP_DWELL_HOME_MS));
+static void hop_to(uint8_t channel, uint32_t dwell_ms) {
+  current_channel = channel;
+  if (esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) != ESP_OK) stat_chan_fail++;
+  vTaskDelay(pdMS_TO_TICKS(dwell_ms));
+}
 
-    current_channel = channels_24[idx];
-    esp_wifi_set_channel(channels_24[idx], WIFI_SECOND_CHAN_NONE);
-    vTaskDelay(pdMS_TO_TICKS(HOP_DWELL_OTHER_MS));
-    idx = (idx + 1) % NUM_24_CHANNELS;
+void channelHopTask(void *parameter) {
+  size_t i24 = 0;
+#if DUAL_BAND
+  size_t i5 = 0;
+#endif
+  for (;;) {
+    hop_to(CHANNEL_HOME, HOP_DWELL_HOME_MS);
+    hop_to(channels_24[i24], HOP_DWELL_OTHER_MS);
+    i24 = (i24 + 1) % NUM_24_CHANNELS;
+#if DUAL_BAND
+    hop_to(CHANNEL_HOME_5, HOP_DWELL_HOME5_MS);
+    hop_to(channels_5[i5], HOP_DWELL_OTHER_MS);
+    i5 = (i5 + 1) % NUM_5_CHANNELS;
+#endif
   }
 }
 
@@ -543,6 +652,19 @@ void bleScanTask(void *parameter) {
     pBLEScan->clearResults();
     vTaskDelay(pdMS_TO_TICKS(100));
   }
+}
+
+// The country decides which channels the radio may tune to. Left alone, the
+// driver's default policy applies (fine for 2.4 GHz 1-11). Build with
+// -DHOP_COUNTRY='"US"' (or your own code) to set it; the C5 build does, since
+// 5 GHz channels depend on it. A C5 also has to be told to use both bands.
+static void radio_setup_bands() {
+#ifdef HOP_COUNTRY
+  if (esp_wifi_set_country_code(HOP_COUNTRY, false) != ESP_OK) radio_setup = "country_failed";
+#endif
+#if DUAL_BAND
+  if (esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO) != ESP_OK) radio_setup = "band_mode_failed";
+#endif
 }
 
 void setup() {
@@ -561,10 +683,11 @@ void setup() {
   // NULL queue and reset the node - repeatedly, near a hovering drone.
   memset(uavs, 0, sizeof(uavs));
   printQueue = xQueueCreate(PRINT_QUEUE_LEN, sizeof(id_data));
-  xTaskCreatePinnedToCore(printerTask, "PrinterTask", 10000, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(printerTask, "PrinterTask", 10000, NULL, 1, NULL, TASK_CORE(1));
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  radio_setup_bands();
 
   BLEDevice::init("DroneID");
   pBLEScan = BLEDevice::getScan();
@@ -573,10 +696,10 @@ void setup() {
 
   esp_wifi_set_promiscuous_rx_cb(&callback);
   esp_wifi_set_promiscuous(true);
-  esp_wifi_set_channel(CHANNEL_HOME, WIFI_SECOND_CHAN_NONE);
+  if (esp_wifi_set_channel(CHANNEL_HOME, WIFI_SECOND_CHAN_NONE) != ESP_OK) stat_chan_fail++;
 
-  xTaskCreatePinnedToCore(bleScanTask, "BLEScanTask", 10000, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(channelHopTask, "ChannelHopTask", 2048, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(bleScanTask, "BLEScanTask", 10000, NULL, 1, NULL, TASK_CORE(1));
+  xTaskCreatePinnedToCore(channelHopTask, "ChannelHopTask", 3072, NULL, 1, NULL, TASK_CORE(0));
 }
 
 void loop() {
