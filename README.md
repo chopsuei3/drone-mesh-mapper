@@ -102,7 +102,13 @@ XIAO ESP32-C5, which hears 5 GHz Wi-Fi too, and the C6. Its output stays compati
     channel) and the next of 153–165. Build with `-DHOP_5G_UNII1` to add 36–48.
   - **Output:** 5 GHz detections say `"band":"5GHz"`.
   - **Diagnostics:** the status line adds `wifi5_frames`, `chan_fail` (channels the radio
-    refused) and `radio` (whether the 5 GHz setup worked).
+    refused), `radio` (whether the 5 GHz setup worked), `bands`, and `ble_duty` (Bluetooth's
+    share of the radio, %).
+  - **Radio sharing:** Wi-Fi and Bluetooth share one radio, and Wi-Fi hears nothing while
+    Bluetooth scans. The C5 scans Bluetooth half the time (`BLE_SCAN_WINDOW_MS`); the S3
+    still scans non-stop.
+  - **Test builds:** `c5_diag`, `c5_diag_wifi_only` (no Bluetooth) and `c5_diag_24_only` (no
+    5 GHz) print the status line every 10 s. Compare their `wifi_frames`.
   - **Country:** the build sets the Wi-Fi country to `US` (`HOP_COUNTRY` in `platformio.ini`),
     because it decides which 5 GHz channels the radio may tune to. Change it to yours.
 - **One wiring for every XIAO**: the mesh relay UART is D4 (TX) and D5 (RX) on the S3, C6
@@ -122,7 +128,7 @@ variants are unchanged from upstream.
   with `-e seeed_xiao_esp32c5`.
 - flightlog has **no authentication** (see above). Remote relays authenticate with a token
   each, but the web UI does not; keep it on your LAN or tailnet.
-- The **C5 build has only been compiled** so far, not yet run on a board.
+- The **C5 build is still being tested** on its first boards; Wi-Fi reception there is being tuned.
 
 ### Changes so far
 
