@@ -68,7 +68,7 @@ static const uint8_t channels_24[] = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
 #define HOP_DWELL_OTHER_MS 100
 #endif
 
-#if SOC_WIFI_SUPPORT_5G
+#if SOC_WIFI_SUPPORT_5G && !defined(NO_5G)
   #define DUAL_BAND 1
   #define CHANNEL_HOME_5 149
   static const uint8_t channels_5[] = {
@@ -83,6 +83,32 @@ static const uint8_t channels_24[] = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
   #endif
 #else
   #define DUAL_BAND 0
+#endif
+
+// Bluetooth scanning. One radio serves both, so while BLE scans Wi-Fi hears
+// nothing; window / interval is BLE's share. The S3 has always scanned
+// non-stop (100/100 ms). A C5 scanning non-stop heard almost no Wi-Fi in its
+// first test, so the C5 scans half the time. -DNO_BLE leaves BLE off: a
+// Wi-Fi-only node, or a test of what Wi-Fi hears on its own.
+#ifndef BLE_SCAN_INTERVAL_MS
+#define BLE_SCAN_INTERVAL_MS 100
+#endif
+#ifndef BLE_SCAN_WINDOW_MS
+  #if SOC_WIFI_SUPPORT_5G
+    #define BLE_SCAN_WINDOW_MS 50
+  #else
+    #define BLE_SCAN_WINDOW_MS 100
+  #endif
+#endif
+#ifdef NO_BLE
+  #define BLE_DUTY_PCT 0
+#else
+  #define BLE_DUTY_PCT (100 * BLE_SCAN_WINDOW_MS / BLE_SCAN_INTERVAL_MS)
+#endif
+
+// The status line's period. Tests build with -DSTATUS_EVERY_S=10.
+#ifndef STATUS_EVERY_S
+#define STATUS_EVERY_S 60
 #endif
 
 // One byte, one writer (the hop task), read by the Wi-Fi callback and the
@@ -553,9 +579,10 @@ static const char *reset_reason_str(esp_reset_reason_t r) {
 // crashed. The host drops the line for having no "mac" and dims it for saying
 // "heartbeat". "chip" names the board's chip; a C5 also reports how many of
 // wifi_frames it heard at 5 GHz, and "chan_fail" counts channels the radio
-// refused - nonzero on a C5 means part of a band is not being heard.
+// refused - nonzero on a C5 means part of a band is not being heard. "bands"
+// and "ble_duty" (BLE's share of the radio, %) say what this build listens to.
 static void print_status(uint32_t now) {
-  char line[480];
+  char line[540];
   snprintf(line, sizeof(line),
     "{\"heartbeat\":\"dualcore active\",\"chip\":\"%s\",\"uptime_s\":%lu,\"reset\":\"%s\","
     "\"heap\":%lu,\"min_heap\":%lu,\"wifi_frames\":%lu,"
@@ -563,7 +590,8 @@ static void print_status(uint32_t now) {
     "\"wifi5_frames\":%lu,"
 #endif
     "\"ble_adv\":%lu,\"odid_wifi\":%lu,\"odid_ble\":%lu,\"dji\":%lu,\"emitted\":%lu,"
-    "\"queue_drops\":%lu,\"chan_fail\":%lu,\"radio\":\"%s\",\"channel\":%u}",
+    "\"queue_drops\":%lu,\"chan_fail\":%lu,\"radio\":\"%s\",\"bands\":\"%s\","
+    "\"ble_duty\":%u,\"channel\":%u}",
     CONFIG_IDF_TARGET, (unsigned long)(now / 1000UL), boot_reason,
     (unsigned long) ESP.getFreeHeap(), (unsigned long) ESP.getMinFreeHeap(),
     (unsigned long) stat_wifi_frames,
@@ -573,7 +601,7 @@ static void print_status(uint32_t now) {
     (unsigned long) stat_ble_adv, (unsigned long) stat_odid_wifi,
     (unsigned long) stat_odid_ble, (unsigned long) stat_dji, (unsigned long) stat_emitted,
     (unsigned long) stat_queue_drops, (unsigned long) stat_chan_fail, radio_setup,
-    (unsigned) current_channel);
+    DUAL_BAND ? "2.4+5" : "2.4", (unsigned) BLE_DUTY_PCT, (unsigned) current_channel);
   Serial.println(line);
 }
 
@@ -607,8 +635,9 @@ static void read_commands(uint32_t now) {
 void printerTask(void *param) {
   id_data UAV;
   // The first status line 5 s after boot, so a freshly flashed board shows at
-  // once what its radios hear; then once a minute.
-  uint32_t last_status = millis() - 55000UL;
+  // once what its radios hear; then every STATUS_EVERY_S.
+  const uint32_t every = STATUS_EVERY_S * 1000UL;
+  uint32_t last_status = millis() - every + 5000UL;
   for (;;) {
     if (xQueueReceive(printQueue, &UAV, pdMS_TO_TICKS(250)) == pdTRUE) {
       send_json_fast(&UAV);
@@ -616,7 +645,7 @@ void printerTask(void *param) {
     }
     uint32_t now = millis();
     read_commands(now);
-    if (now - last_status >= 60000UL) {
+    if (now - last_status >= every) {
       last_status = now;
       print_status(now);
     }
@@ -646,6 +675,7 @@ void channelHopTask(void *parameter) {
   }
 }
 
+#ifndef NO_BLE
 void bleScanTask(void *parameter) {
   for (;;) {
     pBLEScan->start(1, false);
@@ -653,6 +683,7 @@ void bleScanTask(void *parameter) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
+#endif
 
 // The country decides which channels the radio may tune to. Left alone, the
 // driver's default policy applies (fine for 2.4 GHz 1-11). Build with
@@ -689,16 +720,30 @@ void setup() {
   WiFi.disconnect();
   radio_setup_bands();
 
+#ifndef NO_BLE
   BLEDevice::init("DroneID");
   pBLEScan = BLEDevice::getScan();
   pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
   pBLEScan->setActiveScan(true);
+  pBLEScan->setInterval(BLE_SCAN_INTERVAL_MS);
+  pBLEScan->setWindow(BLE_SCAN_WINDOW_MS);
+#else
+  esp_wifi_set_ps(WIFI_PS_NONE);      // allowed only without Bluetooth
+#endif
 
+  // Management frames only: Remote ID and DJI DroneID ride beacons and NAN
+  // action frames, and the callback never looked at anything else. Filtering
+  // in the driver spares the callback - and the RX buffers - the data traffic.
+  wifi_promiscuous_filter_t filt = {};
+  filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+  esp_wifi_set_promiscuous_filter(&filt);
   esp_wifi_set_promiscuous_rx_cb(&callback);
   esp_wifi_set_promiscuous(true);
   if (esp_wifi_set_channel(CHANNEL_HOME, WIFI_SECOND_CHAN_NONE) != ESP_OK) stat_chan_fail++;
 
+#ifndef NO_BLE
   xTaskCreatePinnedToCore(bleScanTask, "BLEScanTask", 10000, NULL, 1, NULL, TASK_CORE(1));
+#endif
   xTaskCreatePinnedToCore(channelHopTask, "ChannelHopTask", 3072, NULL, 1, NULL, TASK_CORE(0));
 }
 
