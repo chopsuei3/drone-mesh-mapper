@@ -432,6 +432,9 @@ page.
 
 ## Troubleshooting
 
+- **A XIAO restarts whenever flightlog connects, or a C5 stops after `entry 0x...` in the
+  raw view.** An older flightlog opened ports in a way that resets the board. An S3 just
+  restarts; a C5 hangs until it is unplugged. Update flightlog, then replug the C5.
 - **Not sure the node is sending anything?** Watch **Raw serial output** on the
   Sources page, or `tail -f flightlog_serial.log`. A healthy node prints a status
   line about once a minute even with no drones about — on the current dualcore
