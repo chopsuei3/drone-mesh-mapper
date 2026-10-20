@@ -883,6 +883,10 @@ page.
   it.
 - **A late node's flights look short.** Where another receiver had already recorded the
   flight, a backlog only adds receptions; see *How several receivers count*.
+- **A XIAO restarts whenever flightlog or a relay connects, or a C5 stops after
+  `entry 0x...` in the raw view.** An older flightlog or relay opened ports in a way that
+  resets the board. An S3 just restarts; a C5 hangs until it is unplugged. Update both ends,
+  then replug the C5.
 - **Dropped lines on the Nodes page.** The relay's spool overflowed: the link was down
   for over a day, or more than 200,000 lines piled up.
 - **In Docker, the port is listed but will not open (`Permission denied`).** The compose

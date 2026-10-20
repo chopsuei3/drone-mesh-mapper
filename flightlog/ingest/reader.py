@@ -4,10 +4,10 @@ The DTR/RTS handling and the one-reader-per-port guard are lifted from
 mesh-mapper.py (:12871 and :13077). Both encode hardware behaviour that was
 learned the hard way and would be easy to reintroduce as a bug:
 
-  * pyserial asserts DTR and RTS on open. On an ESP32-S3 talking over its native
-    USB those lines are wired into the reset logic, so a plain serial.Serial()
-    reboots the board - and the reconnect loop then reboots it again on every
-    retry.
+  * DTR and RTS are wired into an ESP32's reset logic, so opening a port the
+    plain way reboots the board - and the reconnect loop then reboots it again
+    on every retry. Even clearing both lines can pass through the reset state
+    on Linux; see open_serial_no_reset for the order that never does.
   * Two readers on one port steal bytes from each other, producing truncated
     JSON and an endless connect/disconnect cycle in the UI.
 
@@ -173,21 +173,35 @@ def list_ports():
 def open_serial_no_reset(port, baudrate=BAUD_RATE, timeout=1):
     """Open a port WITHOUT rebooting the board on the other end.
 
-    Setting dtr/rts False before open() stores the desired line state, which
-    open() then applies - leaving the chip out of reset and running.
+    An ESP32 on USB reads RTS high with DTR low as "reset" - it is how esptool
+    resets a board - whether it uses its own USB (S3, C5, C6) or a USB-UART
+    bridge with the usual auto-reset transistors. On Linux the driver raises
+    DTR and RTS when the port opens, and pyserial then applies DTR before RTS,
+    so clearing both in the obvious order passes through exactly that state
+    and reboots the board. An S3 restarts; a C5 hangs until power-cycled.
+
+    So the lines go (1,1) -> (1,0) -> (0,0), never through (0,1): open with DTR
+    high and RTS low, which from the driver's (1,1) only lowers RTS, and lower
+    DTR afterwards. RTS is set again last because Windows' usbser only sends a
+    line-state change to the device along with RTS.
     """
     ser = serial.Serial()
     ser.port = port
     ser.baudrate = baudrate
     ser.timeout = timeout
     try:
-        ser.dtr = False
+        ser.dtr = True
         ser.rts = False
     except Exception as e:
         # Some platforms refuse line-state changes before open; the port is
         # still usable, it may just reset the board on connect.
-        logger.debug("could not pre-clear DTR/RTS for %s: %s", port, e)
+        logger.debug("could not pre-set DTR/RTS for %s: %s", port, e)
     ser.open()
+    try:
+        ser.dtr = False
+        ser.rts = False
+    except Exception as e:
+        logger.debug("could not clear DTR for %s: %s", port, e)
     return ser
 
 

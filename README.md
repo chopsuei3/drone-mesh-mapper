@@ -128,7 +128,15 @@ variants are unchanged from upstream.
   with `-e seeed_xiao_esp32c5`.
 - flightlog has **no authentication** (see above). Remote relays authenticate with a token
   each, but the web UI does not; keep it on your LAN or tailnet.
-- The **C5 build is still being tested** on its first boards; Wi-Fi reception there is being tuned.
+- **A C5 hangs after a reset over USB** and stays silent until it is power-cycled. It boots
+  as far as `entry 0x...` and stops. That happened on two Arduino cores, so it isn't fixed
+  in this firmware.
+  - A power-on boot is fine, and the C5 then runs normally.
+  - What resets it is a host setting RTS high with DTR low, esptool's reset. esptool does
+    that at the end of every upload, so **after flashing a C5, unplug and replug it**.
+  - Older flightlog and relays also did it whenever they opened a port. They now open ports
+    in an order that never resets the board, which also stops S3s restarting on every
+    connect. `mesh-mapper.py`, which tracks upstream, still opens ports the old way.
 
 ### Changes so far
 
@@ -304,7 +312,8 @@ Name the environment: `remoteid-mesh-dualcore/platformio.ini` defines S3, C5 and
 and a bare `pio run -t upload` builds and uploads all three. In VS Code, pick the board's env
 (`env:seeed_xiao_esp32s3`, `env:seeed_xiao_esp32c5`) → **Upload** in the PlatformIO sidebar.
 The XIAO C5 has no board definition in the platform yet. The project brings its own, in
-`remoteid-mesh-dualcore/boards/`.
+`remoteid-mesh-dualcore/boards/`. After uploading to a C5, unplug and replug it (see
+*Known gaps*).
 
 ---
 
